@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Flow Image Stepper",
+  "description": "Generate and download Flow images from structured character and scene prompts.",
+  "version": "0.1.0",
+  "permissions": ["activeTab", "storage", "scripting", "downloads", "sidePanel", "clipboardWrite"],
+  "host_permissions": ["https://labs.google/*"],
+  "icons": {
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Flow Image Stepper",
+    "default_icon": {
+      "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://labs.google/fx/*/tools/flow*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

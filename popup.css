@@ -1,0 +1,157 @@
+:root {
+  color-scheme: dark;
+  font-family: Arial, "Malgun Gothic", sans-serif;
+  background: #111;
+  color: #f4f4f4;
+}
+
+body {
+  margin: 0;
+  width: 430px;
+  min-height: 620px;
+  background: #111;
+}
+
+main {
+  padding: 16px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+h2 {
+  margin: 16px 0 8px;
+  font-size: 14px;
+}
+
+p {
+  margin: 6px 0 14px;
+  color: #bdbdbd;
+  font-size: 12px;
+}
+
+.field,
+.settings label {
+  display: grid;
+  gap: 6px;
+}
+
+.field span,
+.settings span {
+  color: #d8d8d8;
+  font-size: 12px;
+}
+
+textarea,
+select,
+button,
+.panel {
+  border: 1px solid #343434;
+  border-radius: 8px;
+  background: #1c1c1c;
+  color: #f4f4f4;
+}
+
+textarea {
+  min-height: 210px;
+  padding: 10px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+select {
+  height: 34px;
+  padding: 0 8px;
+}
+
+.actions {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.action-group {
+  display: grid;
+  gap: 8px;
+}
+
+.action-group h2 {
+  margin: 0;
+  color: #d8d8d8;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.button-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+button {
+  min-height: 36px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-weight: 700;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+button:hover {
+  background: #2a2a2a;
+}
+
+.button-primary {
+  border-color: #3f6dd8;
+  background: #214a9a;
+}
+
+.button-primary:hover {
+  background: #2b5dbc;
+}
+
+.button-download {
+  width: 100%;
+  border-color: #27845b;
+  background: #176344;
+}
+
+.button-download:hover {
+  background: #1f7c56;
+}
+
+.button-muted {
+  border-color: #4a3a3a;
+  background: #251f1f;
+  color: #ddd;
+}
+
+.button-muted:hover {
+  background: #342626;
+}
+
+.panel {
+  max-height: 150px;
+  overflow: auto;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.empty {
+  color: #999;
+}
+
+.log {
+  min-height: 72px;
+  margin: 0;
+}

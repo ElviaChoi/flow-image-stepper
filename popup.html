@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Flow Image Stepper</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Flow Image Stepper</h1>
+        <p>Runs step by step on the currently open Flow page.</p>
+      </header>
+
+      <label class="field">
+        <span>Prompt source</span>
+        <textarea id="source" spellcheck="false" placeholder="Paste character sheets and scene prompts here."></textarea>
+      </label>
+
+      <section class="settings">
+        <label>
+          <span>Scene count</span>
+          <select id="sceneCount">
+            <option value="2" selected>x2</option>
+            <option value="1">x1</option>
+            <option value="3">x3</option>
+            <option value="4">x4</option>
+          </select>
+        </label>
+        <label>
+          <span>Aspect ratio</span>
+          <select id="aspectRatio">
+            <option value="16:9" selected>16:9</option>
+            <option value="4:3">4:3</option>
+            <option value="1:1">1:1</option>
+            <option value="3:4">3:4</option>
+            <option value="9:16">9:16</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="actions">
+        <div class="action-group">
+          <h2>Setup</h2>
+          <div class="button-grid">
+            <button id="parse" class="button-primary">Parse prompts</button>
+            <button id="clearSource" type="button" class="button-muted">Clear saved prompt</button>
+          </div>
+        </div>
+
+        <div class="action-group">
+          <h2>Generate</h2>
+          <div class="button-grid">
+            <button id="runCharacters">Next character</button>
+            <button id="runScenes" class="button-primary">Next scene</button>
+          </div>
+        </div>
+
+        <div class="action-group">
+          <h2>Recovery</h2>
+          <div class="button-grid">
+            <button id="recoverScene" type="button">Recover scene</button>
+            <button id="backScene" type="button">Back one scene</button>
+          </div>
+        </div>
+
+        <div class="action-group">
+          <h2>Export</h2>
+          <button id="downloadScenes" type="button" class="button-download">Download scene images</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Summary</h2>
+        <div id="summary" class="panel empty">Not parsed yet.</div>
+      </section>
+
+      <section>
+        <h2>Log</h2>
+        <pre id="log" class="panel log"></pre>
+      </section>
+    </main>
+    <script src="parser.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
