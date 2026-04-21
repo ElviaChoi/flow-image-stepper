@@ -1,6 +1,7 @@
 const sourceEl = document.getElementById("source");
 const summaryEl = document.getElementById("summary");
 const logEl = document.getElementById("log");
+const modelEl = document.getElementById("model");
 const sceneCountEl = document.getElementById("sceneCount");
 const aspectRatioEl = document.getElementById("aspectRatio");
 
@@ -14,8 +15,11 @@ let checkpoint = null;
 init();
 
 function init() {
-  chrome.storage.local.get(["source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs", "characterRefs", "checkpoint"], (data) => {
+  chrome.storage.local.get(["source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs", "characterRefs", "checkpoint", "model", "sceneCount", "aspectRatio"], (data) => {
     if (data.source) sourceEl.value = data.source;
+    if (data.model) modelEl.value = data.model;
+    if (data.sceneCount) sceneCountEl.value = String(data.sceneCount);
+    if (data.aspectRatio) aspectRatioEl.value = data.aspectRatio;
     sceneOutputs = data.sceneOutputs || [];
     characterRefs = data.characterRefs || {};
     checkpoint = data.checkpoint || null;
@@ -34,6 +38,9 @@ function init() {
   document.getElementById("backScene").addEventListener("click", () => backOneScene());
   document.getElementById("downloadScenes").addEventListener("click", () => runDownloadScenes());
   document.getElementById("clearSource").addEventListener("click", clearSource);
+  modelEl.addEventListener("change", saveSettings);
+  sceneCountEl.addEventListener("change", saveSettings);
+  aspectRatioEl.addEventListener("change", saveSettings);
 }
 
 function parseInput() {
@@ -50,7 +57,8 @@ function parseInput() {
     sceneIndex,
     characterRefs: {},
     sceneOutputs: [],
-    checkpoint: null
+    checkpoint: null,
+    ...getCurrentSettings()
   });
   renderSummary();
   setLog("Parsed prompts.");
@@ -80,7 +88,8 @@ function renderResumePoint() {
   return `Resume point:
 - Last success: ${last}
 - Next character: ${nextCharacter ? nextCharacter.id : "done"}
-- Next scene: ${nextScene ? String(nextScene.index).padStart(3, "0") : "done"}`;
+- Next scene: ${nextScene ? String(nextScene.index).padStart(3, "0") : "done"}
+- Model: ${modelEl.value}`;
 }
 
 function renderCharacterRefStatus() {
@@ -89,8 +98,9 @@ function renderCharacterRefStatus() {
     const ref = characterRefs[character.id];
     const marker = index < characterIndex ? "done" : index === characterIndex ? "next" : "todo";
     const saved = ref ? "saved" : "missing";
+    const model = ref?.model ? ` / ${ref.model}` : "";
     const media = ref?.mediaName ? `: ${ref.mediaName}` : "";
-    return `- ${character.id} [${marker}] ${saved}${media}`;
+    return `- ${character.id} [${marker}] ${saved}${model}${media}`;
   });
   return `Character reference status:\n${lines.join("\n")}`;
 }
@@ -107,8 +117,10 @@ function renderSceneOutputStatus() {
   const lines = parsed.scenes.map((scene, index) => {
     const outputs = byScene.get(scene.index) || [];
     const marker = index < sceneIndex ? "done" : index === sceneIndex ? "next" : "todo";
+    const models = [...new Set(outputs.map((output) => output.model).filter(Boolean))];
+    const model = models.length ? ` / ${models.join(", ")}` : "";
     const names = outputs.map((output) => output.filename).join(", ");
-    return `- ${String(scene.index).padStart(3, "0")} [${marker}] saved ${outputs.length}: ${names || "-"}`;
+    return `- ${String(scene.index).padStart(3, "0")} [${marker}] saved ${outputs.length}${model}: ${names || "-"}`;
   });
   return `Scene output status:\n${lines.join("\n")}`;
 }
@@ -129,13 +141,9 @@ async function runStep(action) {
   setLog(`${action === "runCharacters" ? "Character sheet" : "Scene images"} requested: ${selected.label}`);
   const payload = {
     parsed: selected.parsed,
-    settings: {
-      characterCount: 1,
-      sceneCount: Number(sceneCountEl.value),
-      aspectRatio: aspectRatioEl.value,
-      model: "Nano Banana Pro"
-    }
+    settings: getCurrentSettings()
   };
+  payload.settings.characterCount = 1;
 
   navigator.clipboard.writeText(selected.prompt).catch(() => null).finally(() => {
     sendFlowMessage(tab.id, { type: action, payload }, (response) => {
@@ -165,6 +173,7 @@ async function runRecoverScene() {
   const payload = {
     parsed: selected.parsed,
     settings: {
+      model: modelEl.value,
       sceneCount: Number(sceneCountEl.value)
     }
   };
@@ -350,6 +359,21 @@ function setLog(message) {
   });
   logEl.textContent += `[${time}] ${message}\n`;
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+function getCurrentSettings() {
+  return {
+    model: modelEl.value,
+    sceneCount: Number(sceneCountEl.value),
+    aspectRatio: aspectRatioEl.value
+  };
+}
+
+function saveSettings() {
+  chrome.storage.local.set(getCurrentSettings(), () => {
+    renderSummary();
+    setLog(`Settings saved: ${modelEl.value}, x${sceneCountEl.value}, ${aspectRatioEl.value}.`);
+  });
 }
 
 function clearSource() {

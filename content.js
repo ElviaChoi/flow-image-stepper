@@ -54,6 +54,7 @@ async function runCharacters(payload) {
     await clearPromptAndReferences();
     await setGenerationSettings({
       mode: K.image,
+      model: payload.settings.model,
       aspectRatio: payload.settings.aspectRatio,
       count: 1
     });
@@ -62,7 +63,7 @@ async function runCharacters(payload) {
     await pastePrompt(character.prompt);
     await clickGenerate();
     const newItems = await waitForNewMedia(before, 1, 240000);
-    await saveCharacterReference(character.id, newItems[0]);
+    await saveCharacterReference(character.id, newItems[0], payload.settings.model);
   }
 }
 
@@ -81,12 +82,13 @@ async function runScenes(payload) {
     await pastePrompt(scene.prompt);
     await setGenerationSettings({
       mode: K.image,
+      model: payload.settings.model,
       aspectRatio: payload.settings.aspectRatio,
       count: payload.settings.sceneCount
     });
     await clickGenerate();
     const newItems = await waitForNewMedia(before, payload.settings.sceneCount, 300000);
-    await saveSceneOutputs(scene, newItems, baseName);
+    await saveSceneOutputs(scene, newItems, baseName, payload.settings.model);
   }
 }
 
@@ -100,7 +102,7 @@ async function runRecoverScene(payload) {
     throw new Error(`Could not find ${count} recent scene image(s) to recover.`);
   }
   const baseName = buildSceneBaseName(scene);
-  await saveSceneOutputs(scene, items, baseName);
+  await saveSceneOutputs(scene, items, baseName, payload.settings.model);
 }
 
 async function ensureProjectEditor() {
@@ -117,14 +119,15 @@ async function ensureProjectEditor() {
   throw new Error("Could not find prompt editor or new project button.");
 }
 
-async function setGenerationSettings({ mode, aspectRatio, count }) {
+async function setGenerationSettings({ mode, model, aspectRatio, count }) {
   const settingsButton = findSettingsButton();
   if (!settingsButton) throw new Error("Could not find settings button.");
-  if (isCurrentSetting(settingsButton, aspectRatio, count)) {
+  if (isCurrentSetting(settingsButton, model, aspectRatio, count)) {
     return;
   }
   console.info("[Flow Stepper] opening settings", {
     current: settingsButton.textContent,
+    model,
     aspectRatio,
     count
   });
@@ -134,6 +137,10 @@ async function setGenerationSettings({ mode, aspectRatio, count }) {
 
   clickSettingText(mode, { optional: true });
   await delay(80);
+  if (model) {
+    await clickModelSetting(model);
+    await delay(80);
+  }
   clickSettingText(aspectRatio);
   await delay(80);
   clickSettingText(`x${count}`);
@@ -141,8 +148,8 @@ async function setGenerationSettings({ mode, aspectRatio, count }) {
     selected: getSelectedSettingsText(),
     trigger: settingsButton.textContent
   });
-  await waitFor(() => isCurrentSetting(settingsButton, aspectRatio, count) ||
-    isOpenSettingSelected(aspectRatio, count), 8000, 150);
+  await waitFor(() => isCurrentSetting(settingsButton, model, aspectRatio, count) ||
+    isOpenSettingSelected(model, aspectRatio, count), 8000, 150);
   document.body.click();
   await delay(120);
 }
@@ -160,7 +167,7 @@ async function waitForSettingsPanel(settingsButton, timeoutMs) {
   }, timeoutMs);
 }
 
-function isCurrentSetting(button, aspectRatio, count) {
+function isCurrentSetting(button, model, aspectRatio, count) {
   const text = normalize(button.textContent);
   const aspectMap = {
     "16:9": "crop_16_9",
@@ -171,14 +178,16 @@ function isCurrentSetting(button, aspectRatio, count) {
   };
   const hasCount = text.includes(`x${count}`);
   const hasAspect = text.includes(normalize(aspectRatio)) || text.includes(aspectMap[aspectRatio]);
-  return hasCount && hasAspect;
+  const hasModel = !model || text.includes(normalize(model));
+  return hasModel && hasCount && hasAspect;
 }
 
-function isOpenSettingSelected(aspectRatio, count) {
+function isOpenSettingSelected(model, aspectRatio, count) {
   const selectedText = normalize(getSelectedSettingsText());
+  const hasModel = !model || selectedText.includes(normalize(model));
   const hasCount = selectedText.includes(`x${count}`);
   const hasAspect = selectedText.includes(normalize(aspectRatio));
-  return hasCount && hasAspect;
+  return hasModel && hasCount && hasAspect;
 }
 
 function getSelectedSettingsText() {
@@ -227,6 +236,37 @@ function findPromptBarButtonBeforeGenerate() {
   }
 
   return null;
+}
+
+async function clickModelSetting(model) {
+  const currentButton = findModelDropdownButton();
+  if (!currentButton) {
+    clickSettingText(model, { optional: true });
+    return;
+  }
+
+  if (normalize(currentButton.textContent).includes(normalize(model))) {
+    return;
+  }
+
+  console.info("[Flow Stepper] opening model menu", {
+    current: currentButton.textContent,
+    model
+  });
+  clickElement(currentButton);
+  await waitFor(() => findVisibleSettingCandidate(model), 8000, 150);
+  clickSettingText(model);
+}
+
+function findModelDropdownButton() {
+  const surfaces = getSettingsSurfaces();
+  const buttons = surfaces.flatMap((surface) => [...surface.querySelectorAll("button")]);
+  return buttons.find((button) => {
+    const text = normalize(button.textContent);
+    return button.getAttribute("aria-haspopup") === "menu" &&
+      text.includes("Nano") &&
+      text.includes("Banana");
+  }) || null;
 }
 
 function clickSettingText(text, options = { optional: false }) {
@@ -620,7 +660,7 @@ async function waitForNewMedia(before, expectedCount, timeoutMs) {
   }, timeoutMs);
 }
 
-async function saveCharacterReference(id, item) {
+async function saveCharacterReference(id, item, model) {
   const src = item.src || item.tile.querySelector("img")?.currentSrc || item.tile.querySelector("img")?.src || "";
   const mediaName = getMediaNameFromUrl(src);
   const refs = await loadCharacterReferences();
@@ -630,13 +670,14 @@ async function saveCharacterReference(id, item) {
     tileId: item.tileId || "",
     src,
     mediaName,
+    model: model || "",
     savedAt: Date.now()
   };
   await chrome.storage.local.set({ characterRefs: refs });
   console.info("[Flow Stepper] saved reference", id, refs[id]);
 }
 
-async function saveSceneOutputs(scene, items, baseName) {
+async function saveSceneOutputs(scene, items, baseName, model) {
   const outputs = await loadSceneOutputs();
   const existingKeys = new Set(outputs.map((item) => item.key));
   const additions = items.map((item, index) => {
@@ -652,6 +693,7 @@ async function saveSceneOutputs(scene, items, baseName) {
       tileId: item.tileId || "",
       src: item.src || "",
       mediaName: getMediaNameFromUrl(item.src || ""),
+      model: model || "",
       savedAt: Date.now()
     };
   }).filter((item) => !existingKeys.has(item.key));
