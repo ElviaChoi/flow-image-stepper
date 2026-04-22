@@ -92,8 +92,8 @@ function buildOverviewSummary() {
 
   card.append(
     createEl("h3", "", "다음 작업"),
-    buildMetricRow("캐릭터", nextCharacter ? nextCharacter.id : "완료", `${Math.min(characterIndex + 1, parsed.characters.length)} / ${parsed.characters.length}`),
-    buildMetricRow("장면", nextScene ? String(nextScene.index).padStart(3, "0") : "완료", `${Math.min(sceneIndex + 1, parsed.scenes.length)} / ${parsed.scenes.length}`),
+    buildMetricRow("캐릭터", nextCharacter ? nextCharacter.id : "완료", `${Math.min(characterIndex, parsed.characters.length)} / ${parsed.characters.length} 완료`),
+    buildMetricRow("장면", nextScene ? String(nextScene.index).padStart(3, "0") : "완료", `${Math.min(sceneIndex, parsed.scenes.length)} / ${parsed.scenes.length} 완료`),
     buildMetricRow("모델", modelEl.value, `x${sceneCountEl.value}, ${aspectRatioEl.value}`),
     createEl("div", "summary-last", `마지막 저장: ${last}`)
   );
@@ -191,7 +191,7 @@ function createEl(tag, className = "", text = "") {
 function renderPromptEditor() {
   if (!parsed) {
     promptEditorEl.classList.add("empty");
-    promptEditorEl.textContent = "결과가 마음에 들지 않으면 해당 캐릭터나 장면의 프롬프트만 수정해 다시 생성할 수 있습니다.";
+    promptEditorEl.textContent = "프롬프트를 수정하고 다시 생성 준비를 누르면 해당 캐릭터나 장면부터 다시 만들 수 있습니다.";
     return;
   }
 
@@ -237,13 +237,11 @@ function renderPromptEditor() {
   const actions = document.createElement("div");
   actions.className = "editor-actions";
   actions.append(
-    buildEditorButton("수정 저장", () => saveEditedPrompt(textarea.value), "button-primary", !selected),
-    buildEditorButton("다음 대상으로 지정", () => setSelectedAsNext(), "", !selected),
-    buildEditorButton("저장 후 다음 대상으로", () => {
+    buildEditorButton("수정하고 다시 생성 준비", () => {
       if (saveEditedPrompt(textarea.value, { silent: true })) {
         setSelectedAsNext();
       }
-    }, "", !selected)
+    }, "button-primary", !selected)
   );
 
   promptEditorEl.append(tabs, select, meta, textarea, actions);
@@ -340,7 +338,7 @@ function setSelectedAsNext() {
     delete characterRefs[item.id];
     checkpoint = buildManualCheckpoint(`Character ${item.id}`);
     chrome.storage.local.set({ characterIndex, characterRefs, checkpoint }, () => refreshSavedState());
-    setLog(`Next character set to ${item.id}. Existing saved reference for that character was cleared.`);
+    setLog(`Ready to regenerate character ${item.id}. Existing saved reference was cleared.`);
     return;
   }
 
@@ -348,7 +346,7 @@ function setSelectedAsNext() {
   sceneOutputs = sceneOutputs.filter((output) => output.sceneIndex !== item.index);
   checkpoint = buildManualCheckpoint(`Scene ${String(item.index).padStart(3, "0")}`);
   chrome.storage.local.set({ sceneIndex, sceneOutputs, checkpoint }, () => refreshSavedState());
-  setLog(`Next scene set to ${item.index}. Existing saved outputs for that scene were cleared.`);
+  setLog(`Ready to regenerate scene ${item.index}. Existing saved outputs were cleared.`);
 }
 
 function renderResumePoint() {
