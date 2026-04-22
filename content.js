@@ -19,7 +19,7 @@ const FLOW_STEPPER = {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message?.type?.startsWith("run")) return;
   if (FLOW_STEPPER.running) {
-    sendResponse({ ok: false, message: "Already running." });
+    sendResponse({ ok: false, message: "이미 작업이 실행 중입니다." });
     return;
   }
 
@@ -27,10 +27,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const task = getTask(message);
 
   task
-    .then(() => sendResponse({ ok: true, message: "Step completed." }))
+    .then(() => sendResponse({ ok: true, message: "작업이 완료되었습니다." }))
     .catch((error) => {
       console.error("[Flow Stepper]", error);
-      sendResponse({ ok: false, message: `Error: ${error.message}` });
+      sendResponse({ ok: false, message: `오류: ${error.message}` });
     })
     .finally(() => {
       FLOW_STEPPER.running = false;
@@ -44,7 +44,7 @@ function getTask(message) {
   if (message.type === "runScenes") return runScenes(message.payload);
   if (message.type === "runRecoverScene") return runRecoverScene(message.payload);
   if (message.type === "runDownloadScenes") return runDownloadScenes();
-  return Promise.reject(new Error(`Unknown task: ${message.type}`));
+  return Promise.reject(new Error(`알 수 없는 작업입니다: ${message.type}`));
 }
 
 async function runCharacters(payload) {
@@ -95,11 +95,11 @@ async function runScenes(payload) {
 async function runRecoverScene(payload) {
   await ensureProjectEditor();
   const scene = payload.parsed.scenes[0];
-  if (!scene) throw new Error("No scene is selected for recovery.");
+  if (!scene) throw new Error("최신 결과를 저장할 장면이 선택되지 않았습니다.");
   const count = payload.settings.sceneCount || 1;
   const items = getRecentEditItems(count);
   if (items.length < count) {
-    throw new Error(`Could not find ${count} recent scene image(s) to recover.`);
+    throw new Error(`저장할 최신 장면 이미지 ${count}개를 찾지 못했습니다.`);
   }
   const baseName = buildSceneBaseName(scene);
   await saveSceneOutputs(scene, items, baseName, payload.settings.model);
@@ -116,12 +116,12 @@ async function ensureProjectEditor() {
     await waitFor(findPromptEditor, 30000);
     return;
   }
-  throw new Error("Could not find prompt editor or new project button.");
+  throw new Error("프롬프트 입력창 또는 새 프로젝트 버튼을 찾지 못했습니다.");
 }
 
 async function setGenerationSettings({ mode, model, aspectRatio, count }) {
   const settingsButton = findSettingsButton();
-  if (!settingsButton) throw new Error("Could not find settings button.");
+  if (!settingsButton) throw new Error("생성 설정 버튼을 찾지 못했습니다.");
   if (isCurrentSetting(settingsButton, model, aspectRatio, count)) {
     return;
   }
@@ -158,7 +158,7 @@ async function waitForSettingsPanel(settingsButton, timeoutMs) {
   await waitFor(() => {
     if (settingsButton.getAttribute("aria-expanded") === "true") return true;
     const tabs = [...document.querySelectorAll('[role="tab"]')];
-    if (tabs.some((tab) => [K.image, "16:9", "4:3", "1:1", "3:4", "9:16", "x1", "x2", "x3", "x4"]
+    if (tabs.some((tab) => [K.image, "Imagen", "Nano", "16:9", "4:3", "1:1", "3:4", "9:16", "x1", "x2", "x3", "x4"]
       .some((label) => normalize(tab.textContent).includes(normalize(label))))) {
       return true;
     }
@@ -205,7 +205,7 @@ function findSettingsButton() {
     const text = button.textContent || "";
     return (
       button.getAttribute("aria-haspopup") === "menu" &&
-      (text.includes("Nano") || text.includes("Banana") || text.includes("crop_") || /x[1-4]/.test(text))
+      (text.includes("Nano") || text.includes("Banana") || text.includes("Imagen") || text.includes("crop_") || /x[1-4]/.test(text))
     );
   }) || buttons.find((button) => {
     const text = button.textContent || "";
@@ -230,7 +230,7 @@ function findPromptBarButtonBeforeGenerate() {
       .filter((button) => button !== generate && button.getAttribute("aria-haspopup") === "menu");
     const settings = menuButtons.find((button) => {
       const text = button.textContent || "";
-      return text.includes("Nano") || text.includes("Banana") || text.includes("crop_") || /x[1-4]/.test(text);
+      return text.includes("Nano") || text.includes("Banana") || text.includes("Imagen") || text.includes("crop_") || /x[1-4]/.test(text);
     });
     if (settings) return settings;
   }
@@ -264,8 +264,7 @@ function findModelDropdownButton() {
   return buttons.find((button) => {
     const text = normalize(button.textContent);
     return button.getAttribute("aria-haspopup") === "menu" &&
-      text.includes("Nano") &&
-      text.includes("Banana");
+      ((text.includes("Nano") && text.includes("Banana")) || text.includes("Imagen"));
   }) || null;
 }
 
@@ -273,7 +272,7 @@ function clickSettingText(text, options = { optional: false }) {
   const candidate = findSettingTab(text) || findVisibleSettingCandidate(text);
   if (!candidate) {
     if (options.optional) return;
-    throw new Error(`Could not find setting: ${text}`);
+    throw new Error(`설정 항목을 찾지 못했습니다: ${text}`);
   }
   console.info("[Flow Stepper] click setting", text, {
     text: candidate.textContent,
@@ -360,14 +359,14 @@ function getSettingsSurfaces() {
       const rect = element.getBoundingClientRect();
       const text = normalize(element.textContent);
       return rect.width > 0 && rect.height > 0 &&
-        (text.includes("x1") || text.includes("x2") || text.includes("16:9") || text.includes(K.image));
+        (text.includes("x1") || text.includes("x2") || text.includes("16:9") || text.includes(K.image) || text.includes("Imagen"));
     });
   return surfaces.length ? surfaces : [document.body];
 }
 
 async function pastePrompt(prompt) {
   const editor = findPromptEditor();
-  if (!editor) throw new Error("Could not find prompt editor.");
+  if (!editor) throw new Error("프롬프트 입력창을 찾지 못했습니다.");
   clickElement(editor);
   editor.focus();
   await delay(80);
@@ -381,7 +380,7 @@ async function pastePrompt(prompt) {
   }
 
   if (!editorTextContains(editor, prompt)) {
-    throw new Error("Prompt was not inserted into the Flow editor.");
+    throw new Error("Flow 입력창에 프롬프트를 넣지 못했습니다.");
   }
 }
 
@@ -473,7 +472,7 @@ async function clearPromptAndReferences() {
 async function clickGenerate() {
   await waitFor(findPromptEditor, 15000);
   const button = findGenerateButton();
-  if (!button) throw new Error("Could not find generate button.");
+  if (!button) throw new Error("생성 버튼을 찾지 못했습니다.");
   button.click();
 }
 
@@ -507,7 +506,7 @@ async function attachReference(name) {
   const addButton = findButton((button) =>
     button.textContent.includes("add_2") && button.textContent.includes(K.make)
   );
-  if (!addButton) throw new Error("Could not find add reference button.");
+  if (!addButton) throw new Error("참조 이미지 추가 버튼을 찾지 못했습니다.");
   addButton.click();
   await waitFor(() => document.querySelector(`input[placeholder="${K.assetSearch}"]`), 15000);
 
@@ -714,7 +713,7 @@ function loadSceneOutputs() {
 
 async function runDownloadScenes() {
   const outputs = await loadSceneOutputs();
-  if (!outputs.length) throw new Error("No generated scene images have been saved yet.");
+  if (!outputs.length) throw new Error("아직 저장된 장면 이미지가 없습니다.");
   await ensureProjectEditor();
 
   for (const output of outputs) {
@@ -725,7 +724,7 @@ async function runDownloadScenes() {
 
 async function downloadSavedSceneOutput(output) {
   const item = findSavedSceneItem(output);
-  if (!item) throw new Error(`Could not find generated scene image: ${output.filename}`);
+  if (!item) throw new Error(`생성된 장면 이미지를 찾지 못했습니다: ${output.filename}`);
   await downloadMedia(item, output.filename);
 }
 
@@ -772,7 +771,7 @@ function getMediaNameFromUrl(src) {
 
 async function downloadOriginal(name) {
   const download = findButton((button) => button.textContent.includes(K.download));
-  if (!download) throw new Error("Could not find download button.");
+  if (!download) throw new Error("다운로드 버튼을 찾지 못했습니다.");
   clickElement(download);
   const oneK = await waitFor(() => [...document.querySelectorAll('[role="menuitem"]')]
     .find((item) => item.textContent.includes("1K") && item.textContent.includes(K.originalSize)), 6000);
@@ -863,5 +862,5 @@ async function waitFor(fn, timeoutMs = 30000, intervalMs = 250) {
     if (value) return value;
     await delay(intervalMs);
   }
-  throw new Error("Timed out while waiting for Flow UI.");
+  throw new Error("Flow 화면 응답을 기다리다가 시간이 초과되었습니다.");
 }

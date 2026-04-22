@@ -5,6 +5,10 @@ const modelEl = document.getElementById("model");
 const sceneCountEl = document.getElementById("sceneCount");
 const aspectRatioEl = document.getElementById("aspectRatio");
 const promptEditorEl = document.getElementById("promptEditor");
+const settingsNoteEl = document.getElementById("settingsNote");
+
+const PRO_MODEL = "Nano Banana Pro";
+const PRO_MAX_SCENE_COUNT = 2;
 
 let parsed = null;
 let characterIndex = 0;
@@ -23,6 +27,7 @@ function init() {
     if (data.model) modelEl.value = data.model;
     if (data.sceneCount) sceneCountEl.value = String(data.sceneCount);
     if (data.aspectRatio) aspectRatioEl.value = data.aspectRatio;
+    enforceModelLimits({ persist: false });
     sceneOutputs = data.sceneOutputs || [];
     characterRefs = data.characterRefs || {};
     checkpoint = data.checkpoint || null;
@@ -46,6 +51,7 @@ function init() {
   modelEl.addEventListener("change", saveSettings);
   sceneCountEl.addEventListener("change", saveSettings);
   aspectRatioEl.addEventListener("change", saveSettings);
+  updateSettingsNote();
 }
 
 function parseInput() {
@@ -66,7 +72,7 @@ function parseInput() {
     ...getCurrentSettings()
   });
   renderSummary();
-  setLog("Parsed prompts.");
+  setLog("캐릭터/장면 목록을 만들었습니다.");
 }
 
 function renderSummary() {
@@ -94,7 +100,7 @@ function buildOverviewSummary() {
     createEl("h3", "", "다음 작업"),
     buildMetricRow("캐릭터", nextCharacter ? nextCharacter.id : "완료", `${Math.min(characterIndex, parsed.characters.length)} / ${parsed.characters.length} 완료`),
     buildMetricRow("장면", nextScene ? String(nextScene.index).padStart(3, "0") : "완료", `${Math.min(sceneIndex, parsed.scenes.length)} / ${parsed.scenes.length} 완료`),
-    buildMetricRow("모델", modelEl.value, `x${sceneCountEl.value}, ${aspectRatioEl.value}`),
+    buildMetricRow("모델", modelEl.value, `x${getEffectiveSceneCount()}, ${aspectRatioEl.value}`),
     createEl("div", "summary-last", `마지막 저장: ${last}`)
   );
   return card;
@@ -305,7 +311,7 @@ function saveEditedPrompt(value, options = {}) {
   const item = items[editorIndex];
   const prompt = value.trim();
   if (!item || !prompt) {
-    setLog("Prompt is empty. Nothing saved.");
+    setLog("프롬프트가 비어 있어 저장하지 않았습니다.");
     return false;
   }
 
@@ -316,7 +322,7 @@ function saveEditedPrompt(value, options = {}) {
   chrome.storage.local.set({ parsed }, () => {
     renderSummary();
     if (!options.silent) {
-      setLog(`${editorKind === "characters" ? "Character" : "Scene"} prompt saved: ${getEditorLabel(item, editorIndex)}.`);
+      setLog(`${editorKind === "characters" ? "캐릭터" : "장면"} 프롬프트를 저장했습니다: ${getEditorLabel(item, editorIndex)}.`);
     }
   });
   return true;
@@ -338,7 +344,7 @@ function setSelectedAsNext() {
     delete characterRefs[item.id];
     checkpoint = buildManualCheckpoint(`Character ${item.id}`);
     chrome.storage.local.set({ characterIndex, characterRefs, checkpoint }, () => refreshSavedState());
-    setLog(`Ready to regenerate character ${item.id}. Existing saved reference was cleared.`);
+    setLog(`${item.id} 캐릭터를 다시 생성할 준비가 완료되었습니다. 기존 참조 기록은 삭제했습니다.`);
     return;
   }
 
@@ -346,7 +352,7 @@ function setSelectedAsNext() {
   sceneOutputs = sceneOutputs.filter((output) => output.sceneIndex !== item.index);
   checkpoint = buildManualCheckpoint(`Scene ${String(item.index).padStart(3, "0")}`);
   chrome.storage.local.set({ sceneIndex, sceneOutputs, checkpoint }, () => refreshSavedState());
-  setLog(`Ready to regenerate scene ${item.index}. Existing saved outputs were cleared.`);
+  setLog(`${item.index}번 장면을 다시 생성할 준비가 완료되었습니다. 기존 장면 결과는 삭제했습니다.`);
 }
 
 function renderResumePoint() {
@@ -404,11 +410,11 @@ async function runStep(action) {
   }
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !tab.url?.includes("labs.google") || !tab.url?.includes("/tools/flow")) {
-    setLog("The active tab is not a Flow page.");
+    setLog("현재 탭이 Flow 페이지가 아닙니다.");
     return;
   }
 
-  setLog(`${action === "runCharacters" ? "Character sheet" : "Scene images"} requested: ${selected.label}`);
+  setLog(`${action === "runCharacters" ? "캐릭터 시트" : "장면 이미지"} 생성을 요청했습니다: ${selected.label}`);
   const payload = {
     parsed: selected.parsed,
     settings: getCurrentSettings()
@@ -418,13 +424,13 @@ async function runStep(action) {
   navigator.clipboard.writeText(selected.prompt).catch(() => null).finally(() => {
     sendFlowMessage(tab.id, { type: action, payload }, (response) => {
       if (chrome.runtime.lastError) {
-        setLog(`Failed: ${chrome.runtime.lastError.message}`);
+        setLog(`실패: ${chrome.runtime.lastError.message}`);
         return;
       }
       if (response?.ok) {
         markSelectedDone(action);
       }
-      setLog(response?.message || "Command sent.");
+      setLog(response?.message || "명령을 보냈습니다.");
     });
   });
 }
@@ -435,29 +441,29 @@ async function runRecoverScene() {
   if (!selected) return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !tab.url?.includes("labs.google") || !tab.url?.includes("/tools/flow")) {
-    setLog("The active tab is not a Flow page.");
+    setLog("현재 탭이 Flow 페이지가 아닙니다.");
     return;
   }
 
-  setLog(`Recover requested: ${selected.label}`);
+  setLog(`최신 결과 저장을 요청했습니다: ${selected.label}`);
   const payload = {
     parsed: selected.parsed,
     settings: {
       model: modelEl.value,
-      sceneCount: Number(sceneCountEl.value)
+      sceneCount: getEffectiveSceneCount()
     }
   };
 
   sendFlowMessage(tab.id, { type: "runRecoverScene", payload }, (response) => {
     if (chrome.runtime.lastError) {
-      setLog(`Failed: ${chrome.runtime.lastError.message}`);
+      setLog(`실패: ${chrome.runtime.lastError.message}`);
       return;
     }
     if (response?.ok) {
       markSelectedDone("runScenes");
       refreshSavedState();
     }
-    setLog(response?.message || "Command sent.");
+    setLog(response?.message || "명령을 보냈습니다.");
   });
 }
 
@@ -470,7 +476,7 @@ function backOneScene() {
   sceneOutputs = sceneOutputs.filter((output) => output.sceneIndex !== scene.index);
   chrome.storage.local.set({ sceneIndex, sceneOutputs }, () => {
     renderSummary();
-    setLog(`Back to scene ${scene.index}. Removed saved outputs for that scene.`);
+    setLog(`${scene.index}번 장면으로 돌아갔습니다. 해당 장면의 기존 결과는 삭제했습니다.`);
   });
 }
 
@@ -478,21 +484,21 @@ async function runDownloadScenes() {
   chrome.storage.local.get({ sceneOutputs: [] }, (data) => {
     const outputs = data.sceneOutputs || [];
     if (!outputs.length) {
-      setLog("No generated scene images have been saved yet.");
+      setLog("아직 저장된 장면 이미지가 없습니다.");
       return;
     }
 
-    setLog(`Scene image download requested: ${outputs.length} file(s).`);
+    setLog(`장면 이미지 다운로드를 요청했습니다: ${outputs.length}개`);
     chrome.runtime.sendMessage({ type: "downloadSceneOutputs", outputs }, (response) => {
       if (chrome.runtime.lastError) {
-        setLog(`Failed: ${chrome.runtime.lastError.message}`);
+        setLog(`실패: ${chrome.runtime.lastError.message}`);
         return;
       }
       if (!response?.ok) {
-        setLog(`Error: ${response?.message || "Download failed."}`);
+        setLog(`오류: ${response?.message || "다운로드에 실패했습니다."}`);
         return;
       }
-      setLog(`Download started: ${response.count} file(s).`);
+      setLog(`다운로드를 시작했습니다: ${response.count}개`);
     });
   });
 }
@@ -500,16 +506,16 @@ async function runDownloadScenes() {
 async function runDownloadScenesFromPage() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !tab.url?.includes("labs.google") || !tab.url?.includes("/tools/flow")) {
-    setLog("The active tab is not a Flow page.");
+    setLog("현재 탭이 Flow 페이지가 아닙니다.");
     return;
   }
 
   sendFlowMessage(tab.id, { type: "runDownloadScenes", payload: {} }, (response) => {
     if (chrome.runtime.lastError) {
-      setLog(`Failed: ${chrome.runtime.lastError.message}`);
+      setLog(`실패: ${chrome.runtime.lastError.message}`);
       return;
     }
-    setLog(response?.message || "Command sent.");
+    setLog(response?.message || "명령을 보냈습니다.");
   });
 }
 
@@ -517,7 +523,7 @@ function selectNextItem(action) {
   if (action === "runCharacters") {
     const item = parsed.characters[characterIndex];
     if (!item) {
-      setLog("No remaining character sheets.");
+      setLog("남은 캐릭터 시트가 없습니다.");
       return null;
     }
     return {
@@ -529,7 +535,7 @@ function selectNextItem(action) {
   }
   const item = parsed.scenes[sceneIndex];
   if (!item) {
-    setLog("No remaining scenes.");
+    setLog("남은 장면이 없습니다.");
     return null;
   }
   return {
@@ -550,7 +556,7 @@ async function ensureSceneReferencesReady(scene) {
   const missing = getMissingSceneReferences(scene);
   if (!missing.length) return true;
   renderSummary();
-  setLog(`Missing character reference(s) for scene ${scene.index}: ${missing.join(", ")}. Generate or recover them before running this scene.`);
+  setLog(`${scene.index}번 장면에 필요한 캐릭터 참조가 없습니다: ${missing.join(", ")}. 먼저 해당 캐릭터를 생성하거나 복구해 주세요.`);
   return false;
 }
 
@@ -644,16 +650,53 @@ function setLog(message) {
 function getCurrentSettings() {
   return {
     model: modelEl.value,
-    sceneCount: Number(sceneCountEl.value),
+    sceneCount: getEffectiveSceneCount(),
     aspectRatio: aspectRatioEl.value
   };
 }
 
 function saveSettings() {
+  enforceModelLimits({ persist: false });
   chrome.storage.local.set(getCurrentSettings(), () => {
     renderSummary();
-    setLog(`Settings saved: ${modelEl.value}, x${sceneCountEl.value}, ${aspectRatioEl.value}.`);
+    updateSettingsNote();
+    setLog(`설정을 저장했습니다: ${modelEl.value}, x${getEffectiveSceneCount()}, ${aspectRatioEl.value}`);
   });
+}
+
+function getEffectiveSceneCount() {
+  const selectedCount = Number(sceneCountEl.value);
+  if (modelEl.value === PRO_MODEL) {
+    return Math.min(selectedCount, PRO_MAX_SCENE_COUNT);
+  }
+  return selectedCount;
+}
+
+function enforceModelLimits(options = { persist: true }) {
+  const isPro = modelEl.value === PRO_MODEL;
+  for (const option of sceneCountEl.options) {
+    const count = Number(option.value);
+    option.disabled = isPro && count > PRO_MAX_SCENE_COUNT;
+  }
+
+  if (isPro && Number(sceneCountEl.value) > PRO_MAX_SCENE_COUNT) {
+    sceneCountEl.value = String(PRO_MAX_SCENE_COUNT);
+    if (options.persist) {
+      chrome.storage.local.set(getCurrentSettings());
+    }
+  }
+  updateSettingsNote();
+}
+
+function updateSettingsNote() {
+  if (!settingsNoteEl) return;
+  if (modelEl.value === PRO_MODEL) {
+    settingsNoteEl.textContent = "Nano Banana Pro는 사용량 제한에 걸리기 쉬워 장면 생성 수를 최대 x2로 제한합니다.";
+    settingsNoteEl.classList.add("is-visible");
+    return;
+  }
+  settingsNoteEl.textContent = "";
+  settingsNoteEl.classList.remove("is-visible");
 }
 
 function clearSource() {
@@ -666,7 +709,7 @@ function clearSource() {
   sourceEl.value = "";
   summaryEl.classList.add("empty");
   summaryEl.classList.remove("summary-dashboard");
-  summaryEl.textContent = "Not parsed yet.";
+  summaryEl.textContent = "아직 목록이 없습니다.";
   logEl.textContent = "";
   chrome.storage.local.remove(["source", "parsed", "characterIndex", "sceneIndex", "characterRefs", "sceneOutputs", "checkpoint"]);
   renderPromptEditor();
