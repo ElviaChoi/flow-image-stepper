@@ -1,34 +1,41 @@
 :root {
   color-scheme: dark;
   font-family: Arial, "Malgun Gothic", sans-serif;
-  background: #111;
-  color: #f4f4f4;
+  background: #0d1117;
+  color: #f3f7fb;
 }
 
 body {
   margin: 0;
-  width: 430px;
+  width: 100%;
+  min-width: 380px;
   min-height: 620px;
-  background: #111;
+  background: #0d1117;
 }
 
 main {
-  padding: 16px;
+  box-sizing: border-box;
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: 20px;
 }
 
 h1 {
   margin: 0;
+  color: #f1e7d0;
   font-size: 20px;
 }
 
 h2 {
   margin: 16px 0 8px;
+  color: #e6dbc3;
   font-size: 14px;
+  font-weight: 800;
 }
 
 p {
   margin: 6px 0 14px;
-  color: #bdbdbd;
+  color: #a7c4bd;
   font-size: 12px;
 }
 
@@ -40,22 +47,25 @@ p {
 
 .field span,
 .settings span {
-  color: #d8d8d8;
+  color: #cfd8d3;
   font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
 }
 
 textarea,
 select,
 button,
 .panel {
-  border: 1px solid #343434;
+  border: 1px solid #2e3a46;
   border-radius: 8px;
-  background: #1c1c1c;
-  color: #f4f4f4;
+  background: #151b22;
+  color: #f3f7fb;
 }
 
 textarea {
-  min-height: 210px;
+  min-height: 110px;
+  max-height: 160px;
   padding: 10px;
   resize: vertical;
   line-height: 1.45;
@@ -90,8 +100,9 @@ select {
 
 .action-group h2 {
   margin: 0;
-  color: #d8d8d8;
+  color: #cfd8d3;
   font-size: 12px;
+  font-weight: 800;
   letter-spacing: 0;
 }
 
@@ -106,40 +117,49 @@ button {
   padding: 8px 10px;
   cursor: pointer;
   font-weight: 700;
+  line-height: 1.35;
+  white-space: normal;
   transition: background 120ms ease, border-color 120ms ease;
 }
 
 button:hover {
-  background: #2a2a2a;
+  background: #202b35;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .button-primary {
-  border-color: #3f6dd8;
-  background: #214a9a;
+  border-color: #3b82f6;
+  background: #2563eb;
+  color: #ffffff;
 }
 
 .button-primary:hover {
-  background: #2b5dbc;
+  background: #1d4ed8;
 }
 
 .button-download {
   width: 100%;
-  border-color: #27845b;
-  background: #176344;
+  border-color: #22c55e;
+  background: #15803d;
+  color: #ffffff;
 }
 
 .button-download:hover {
-  background: #1f7c56;
+  background: #166534;
 }
 
 .button-muted {
-  border-color: #4a3a3a;
-  background: #251f1f;
-  color: #ddd;
+  border-color: #57414a;
+  background: #261f24;
+  color: #f1dfe5;
 }
 
 .button-muted:hover {
-  background: #342626;
+  background: #34262e;
 }
 
 .panel {
@@ -156,6 +176,177 @@ button:hover {
 }
 
 .log {
-  min-height: 72px;
+  min-height: 150px;
+  max-height: 260px;
   margin: 0;
+}
+
+.summary-dashboard {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  white-space: normal;
+}
+
+.summary-card {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid #263442;
+  border-radius: 8px;
+  background: #101720;
+}
+
+.summary-card h3 {
+  margin: 0 0 2px;
+  color: #f3f7fb;
+  font-size: 12px;
+}
+
+.summary-overview {
+  background: #111d2b;
+  border-color: #2f4660;
+}
+
+.summary-metric,
+.summary-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.summary-metric {
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+}
+
+.metric-label,
+.metric-detail,
+.summary-last,
+.summary-empty,
+.summary-row-text span {
+  color: #aeb8c4;
+}
+
+.metric-value,
+.summary-row-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric-detail {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.summary-last {
+  padding-top: 4px;
+  border-top: 1px solid #263442;
+  font-size: 11px;
+}
+
+.summary-row-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.summary-row-text span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.status-pill {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 48px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.status-pill.is-done {
+  background: #123524;
+  color: #91f2bd;
+}
+
+.status-pill.is-next {
+  background: #1e3a8a;
+  color: #bfdbfe;
+}
+
+.status-pill.is-todo {
+  background: #28313b;
+  color: #cbd5e1;
+}
+
+.prompt-editor {
+  display: grid;
+  gap: 8px;
+  max-height: none;
+}
+
+.editor-tabs,
+.editor-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.editor-actions {
+  grid-template-columns: 1fr;
+}
+
+.editor-tabs button {
+  min-height: 30px;
+  padding: 6px 8px;
+}
+
+.editor-tabs button.active {
+  border-color: #3b82f6;
+  background: #2563eb;
+}
+
+.editor-select {
+  width: 100%;
+}
+
+.editor-meta {
+  color: #bdbdbd;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.item-prompt {
+  min-height: 150px;
+  font-size: 12px;
+}
+
+@media (min-width: 640px) {
+  .settings {
+    grid-template-columns: 1.4fr 1fr 1fr;
+  }
+
+  .settings label:first-child {
+    grid-column: auto;
+  }
+
+  .editor-actions {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  main {
+    padding: 14px;
+  }
+
+  .button-grid,
+  .editor-actions {
+    grid-template-columns: 1fr;
+  }
 }

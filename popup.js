@@ -4,6 +4,7 @@ const logEl = document.getElementById("log");
 const modelEl = document.getElementById("model");
 const sceneCountEl = document.getElementById("sceneCount");
 const aspectRatioEl = document.getElementById("aspectRatio");
+const promptEditorEl = document.getElementById("promptEditor");
 
 let parsed = null;
 let characterIndex = 0;
@@ -11,6 +12,8 @@ let sceneIndex = 0;
 let sceneOutputs = [];
 let characterRefs = {};
 let checkpoint = null;
+let editorKind = "characters";
+let editorIndex = 0;
 
 init();
 
@@ -27,6 +30,8 @@ function init() {
       parsed = data.parsed;
       characterIndex = data.characterIndex || 0;
       sceneIndex = data.sceneIndex || 0;
+      editorKind = characterIndex < parsed.characters.length ? "characters" : "scenes";
+      editorIndex = editorKind === "characters" ? characterIndex : sceneIndex;
       renderSummary();
     }
   });
@@ -67,16 +72,283 @@ function parseInput() {
 function renderSummary() {
   if (!parsed) return;
   summaryEl.classList.remove("empty");
-  summaryEl.textContent = `${renderResumePoint()}
+  summaryEl.classList.add("summary-dashboard");
+  summaryEl.innerHTML = "";
+  summaryEl.append(
+    buildOverviewSummary(),
+    buildCharacterSummary(),
+    buildSceneSummary()
+  );
+  renderPromptEditor();
+}
 
-${FlowPromptParser.summarize(parsed)}
+function buildOverviewSummary() {
+  const card = createEl("div", "summary-card summary-overview");
+  const nextCharacter = parsed.characters[characterIndex];
+  const nextScene = parsed.scenes[sceneIndex];
+  const last = checkpoint
+    ? `${checkpoint.label} / ${new Date(checkpoint.savedAt).toLocaleString("ko-KR")}`
+    : "아직 완료된 작업이 없습니다.";
 
-Next character: ${Math.min(characterIndex + 1, parsed.characters.length)}/${parsed.characters.length}
-Next scene: ${Math.min(sceneIndex + 1, parsed.scenes.length)}/${parsed.scenes.length}
+  card.append(
+    createEl("h3", "", "다음 작업"),
+    buildMetricRow("캐릭터", nextCharacter ? nextCharacter.id : "완료", `${Math.min(characterIndex + 1, parsed.characters.length)} / ${parsed.characters.length}`),
+    buildMetricRow("장면", nextScene ? String(nextScene.index).padStart(3, "0") : "완료", `${Math.min(sceneIndex + 1, parsed.scenes.length)} / ${parsed.scenes.length}`),
+    buildMetricRow("모델", modelEl.value, `x${sceneCountEl.value}, ${aspectRatioEl.value}`),
+    createEl("div", "summary-last", `마지막 저장: ${last}`)
+  );
+  return card;
+}
 
-${renderCharacterRefStatus()}
+function buildCharacterSummary() {
+  const card = createEl("div", "summary-card");
+  card.append(createEl("h3", "", "캐릭터 참조 상태"));
+  if (!parsed.characters.length) {
+    card.append(createEl("div", "summary-empty", "캐릭터 프롬프트가 없습니다."));
+    return card;
+  }
 
-${renderSceneOutputStatus()}`;
+  for (const [index, character] of parsed.characters.entries()) {
+    const ref = characterRefs[character.id];
+    const status = getProgressStatus(index, characterIndex);
+    const savedText = ref ? `저장됨${ref.model ? ` / ${ref.model}` : ""}` : "참조 없음";
+    card.append(buildStatusRow({
+      title: character.id,
+      detail: ref?.mediaName || savedText,
+      status
+    }));
+  }
+  return card;
+}
+
+function buildSceneSummary() {
+  const card = createEl("div", "summary-card");
+  card.append(createEl("h3", "", "장면 결과 상태"));
+  if (!parsed.scenes.length) {
+    card.append(createEl("div", "summary-empty", "장면 프롬프트가 없습니다."));
+    return card;
+  }
+
+  const byScene = new Map();
+  for (const output of sceneOutputs) {
+    const list = byScene.get(output.sceneIndex) || [];
+    list.push(output);
+    byScene.set(output.sceneIndex, list);
+  }
+
+  for (const [index, scene] of parsed.scenes.entries()) {
+    const outputs = byScene.get(scene.index) || [];
+    const status = getProgressStatus(index, sceneIndex);
+    const refs = scene.references.length ? scene.references.join(", ") : "참조 없음";
+    const filenames = outputs.map((output) => output.filename).join(", ");
+    const detail = `저장 ${outputs.length}개 / ${refs}${filenames ? ` / ${filenames}` : ""}`;
+    card.append(buildStatusRow({
+      title: String(scene.index).padStart(3, "0"),
+      detail,
+      status
+    }));
+  }
+  return card;
+}
+
+function buildMetricRow(label, value, detail) {
+  const row = createEl("div", "summary-metric");
+  row.append(
+    createEl("span", "metric-label", label),
+    createEl("strong", "metric-value", value),
+    createEl("span", "metric-detail", detail)
+  );
+  return row;
+}
+
+function buildStatusRow({ title, detail, status }) {
+  const row = createEl("div", "summary-row");
+  const text = createEl("div", "summary-row-text");
+  text.append(
+    createEl("strong", "", title),
+    createEl("span", "", detail)
+  );
+  row.append(
+    createEl("span", `status-pill ${status.className}`, status.label),
+    text
+  );
+  return row;
+}
+
+function getProgressStatus(index, currentIndex) {
+  if (index < currentIndex) return { label: "완료", className: "is-done" };
+  if (index === currentIndex) return { label: "다음", className: "is-next" };
+  return { label: "대기", className: "is-todo" };
+}
+
+function createEl(tag, className = "", text = "") {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text) element.textContent = text;
+  return element;
+}
+
+function renderPromptEditor() {
+  if (!parsed) {
+    promptEditorEl.classList.add("empty");
+    promptEditorEl.textContent = "결과가 마음에 들지 않으면 해당 캐릭터나 장면의 프롬프트만 수정해 다시 생성할 수 있습니다.";
+    return;
+  }
+
+  const items = getEditorItems();
+  promptEditorEl.classList.remove("empty");
+  promptEditorEl.innerHTML = "";
+
+  const tabs = document.createElement("div");
+  tabs.className = "editor-tabs";
+  tabs.append(
+    buildEditorTab("characters", `캐릭터 (${parsed.characters.length})`),
+    buildEditorTab("scenes", `장면 (${parsed.scenes.length})`)
+  );
+
+  const select = document.createElement("select");
+  select.className = "editor-select";
+  for (const [index, item] of items.entries()) {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = getEditorLabel(item, index);
+    select.append(option);
+  }
+  editorIndex = clampEditorIndex(editorIndex, items.length);
+  select.value = String(editorIndex);
+  select.addEventListener("change", () => {
+    editorIndex = Number(select.value);
+    renderPromptEditor();
+  });
+
+  const selected = items[editorIndex];
+  const textarea = document.createElement("textarea");
+  textarea.id = "itemPrompt";
+  textarea.className = "item-prompt";
+  textarea.spellcheck = false;
+  textarea.value = selected?.prompt || "";
+  textarea.placeholder = items.length ? "이 항목의 프롬프트를 수정하세요." : "이 그룹에 파싱된 프롬프트가 없습니다.";
+  textarea.disabled = !selected;
+
+  const meta = document.createElement("div");
+  meta.className = "editor-meta";
+  meta.textContent = selected ? getEditorMeta(selected) : "수정할 항목이 없습니다.";
+
+  const actions = document.createElement("div");
+  actions.className = "editor-actions";
+  actions.append(
+    buildEditorButton("수정 저장", () => saveEditedPrompt(textarea.value), "button-primary", !selected),
+    buildEditorButton("다음 대상으로 지정", () => setSelectedAsNext(), "", !selected),
+    buildEditorButton("저장 후 다음 대상으로", () => {
+      if (saveEditedPrompt(textarea.value, { silent: true })) {
+        setSelectedAsNext();
+      }
+    }, "", !selected)
+  );
+
+  promptEditorEl.append(tabs, select, meta, textarea, actions);
+}
+
+function buildEditorTab(kind, label) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.className = kind === editorKind ? "active" : "";
+  button.addEventListener("click", () => {
+    editorKind = kind;
+    editorIndex = kind === "characters" ? clampEditorIndex(characterIndex, parsed.characters.length) : clampEditorIndex(sceneIndex, parsed.scenes.length);
+    renderPromptEditor();
+  });
+  return button;
+}
+
+function buildEditorButton(label, onClick, className = "", disabled = false) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  if (className) button.className = className;
+  button.disabled = disabled;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function getEditorItems() {
+  return editorKind === "characters" ? parsed.characters : parsed.scenes;
+}
+
+function clampEditorIndex(index, length) {
+  if (!length) return 0;
+  return Math.min(Math.max(index, 0), length - 1);
+}
+
+function getEditorLabel(item, index) {
+  if (editorKind === "characters") {
+    const marker = index < characterIndex ? "완료" : index === characterIndex ? "다음" : "대기";
+    return `${item.id} [${marker}]`;
+  }
+  const marker = index < sceneIndex ? "완료" : index === sceneIndex ? "다음" : "대기";
+  return `${String(item.index).padStart(3, "0")} / ${item.total} [${marker}]`;
+}
+
+function getEditorMeta(item) {
+  if (editorKind === "characters") {
+    const ref = characterRefs[item.id];
+    return ref
+      ? `저장된 캐릭터 참조가 있습니다: ${ref.mediaName || ref.href || item.id}`
+      : "아직 저장된 캐릭터 참조가 없습니다.";
+  }
+  const refs = item.references?.length ? item.references.join(", ") : "참조 없음";
+  const saved = sceneOutputs.filter((output) => output.sceneIndex === item.index).length;
+  return `참조 캐릭터: ${refs}. 저장된 장면 이미지: ${saved}.`;
+}
+
+function saveEditedPrompt(value, options = {}) {
+  const items = getEditorItems();
+  const item = items[editorIndex];
+  const prompt = value.trim();
+  if (!item || !prompt) {
+    setLog("Prompt is empty. Nothing saved.");
+    return false;
+  }
+
+  item.prompt = prompt;
+  if (editorKind === "scenes") {
+    item.references = getReferencesFromPrompt(prompt);
+  }
+  chrome.storage.local.set({ parsed }, () => {
+    renderSummary();
+    if (!options.silent) {
+      setLog(`${editorKind === "characters" ? "Character" : "Scene"} prompt saved: ${getEditorLabel(item, editorIndex)}.`);
+    }
+  });
+  return true;
+}
+
+function getReferencesFromPrompt(prompt) {
+  const knownIds = new Set((parsed.characters || []).map((character) => character.id));
+  return [...new Set(prompt.match(/[^\s,()]+_CS-\d{2}/g) || [])]
+    .filter((id) => knownIds.has(id));
+}
+
+function setSelectedAsNext() {
+  const items = getEditorItems();
+  const item = items[editorIndex];
+  if (!item) return;
+
+  if (editorKind === "characters") {
+    characterIndex = editorIndex;
+    delete characterRefs[item.id];
+    checkpoint = buildManualCheckpoint(`Character ${item.id}`);
+    chrome.storage.local.set({ characterIndex, characterRefs, checkpoint }, () => refreshSavedState());
+    setLog(`Next character set to ${item.id}. Existing saved reference for that character was cleared.`);
+    return;
+  }
+
+  sceneIndex = editorIndex;
+  sceneOutputs = sceneOutputs.filter((output) => output.sceneIndex !== item.index);
+  checkpoint = buildManualCheckpoint(`Scene ${String(item.index).padStart(3, "0")}`);
+  chrome.storage.local.set({ sceneIndex, sceneOutputs, checkpoint }, () => refreshSavedState());
+  setLog(`Next scene set to ${item.index}. Existing saved outputs for that scene were cleared.`);
 }
 
 function renderResumePoint() {
@@ -317,6 +589,16 @@ function buildCheckpoint(type, item) {
   };
 }
 
+function buildManualCheckpoint(label) {
+  return {
+    type: "manual",
+    label: `Edited ${label}`,
+    characterIndex,
+    sceneIndex,
+    savedAt: Date.now()
+  };
+}
+
 function refreshSavedState(options = { render: true }) {
   return new Promise((resolve) => {
     chrome.storage.local.get({ sceneOutputs: [], characterRefs: {} }, (data) => {
@@ -385,7 +667,9 @@ function clearSource() {
   checkpoint = null;
   sourceEl.value = "";
   summaryEl.classList.add("empty");
+  summaryEl.classList.remove("summary-dashboard");
   summaryEl.textContent = "Not parsed yet.";
   logEl.textContent = "";
   chrome.storage.local.remove(["source", "parsed", "characterIndex", "sceneIndex", "characterRefs", "sceneOutputs", "checkpoint"]);
+  renderPromptEditor();
 }
