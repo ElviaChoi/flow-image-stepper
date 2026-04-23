@@ -16,6 +16,10 @@ const FLOW_STEPPER = {
   delayMs: 350,
   debug: false
 };
+const CHARACTER_REFS_BY_PROJECT_KEY = "characterRefsByProject";
+const CHARACTER_LIBRARY_BY_PROJECT_KEY = "characterLibraryByProject";
+const PROJECT_LAST_USED_KEY = "projectLastUsedAt";
+const MAX_REFS_PER_PROJECT = 200;
 
 function debugLog(message, data) {
   if (!FLOW_STEPPER.debug) return;
@@ -98,6 +102,7 @@ function getTask(message) {
 }
 
 async function runCharacters(payload) {
+  await migrateLegacyCharacterStorage();
   await ensureProjectEditor();
   for (const character of payload.parsed.characters) {
     console.info("[Flow Stepper] character", character.id);
@@ -118,6 +123,7 @@ async function runCharacters(payload) {
 }
 
 async function runScenes(payload) {
+  await migrateLegacyCharacterStorage();
   await ensureProjectEditor();
   for (const scene of payload.parsed.scenes) {
     const baseName = buildSceneBaseName(scene);
@@ -264,7 +270,7 @@ function isCurrentSetting(button, model, aspectRatio, count, options = { require
     "3:4": "crop_portrait",
     "9:16": "crop_9_16"
   };
-  const hasCount = !options.requireCount || text.includes(`x${count}`) || text.includes(String(count));
+  const hasCount = !options.requireCount || hasCountSelectionToken(text, count);
   const hasAspect = text.includes(normalize(aspectRatio)) || text.includes(aspectMap[aspectRatio]);
   const hasModel = !model || text.includes(normalize(model));
   return hasModel && hasCount && hasAspect;
@@ -273,7 +279,7 @@ function isCurrentSetting(button, model, aspectRatio, count, options = { require
 function isOpenSettingSelected(model, aspectRatio, count, options = { requireCount: true }) {
   const selectedText = normalize(getSelectedSettingsText());
   const hasModel = !model || selectedText.includes(normalize(model));
-  const hasCount = !options.requireCount || selectedText.includes(`x${count}`) || selectedText.includes(String(count));
+  const hasCount = !options.requireCount || hasCountSelectionToken(selectedText, count);
   const hasAspect = selectedText.includes(normalize(aspectRatio));
   return hasModel && hasCount && hasAspect;
 }
@@ -528,6 +534,18 @@ function hasCountToken(value, countText) {
     text.includes(`NUM_IMAGES_${countText}`) ||
     text.endsWith(`-${countText}`) ||
     text.endsWith(`_${countText}`);
+}
+
+function hasCountSelectionToken(text, count) {
+  const normalized = normalize(text).toLowerCase();
+  const countText = String(count);
+  return normalized.includes(`x${countText}`) ||
+    normalized.includes(`count${countText}`) ||
+    normalized.includes(`count_${countText}`) ||
+    normalized.includes(`numimages${countText}`) ||
+    normalized.includes(`num_images_${countText}`) ||
+    normalized.endsWith(`-${countText}`) ||
+    normalized.endsWith(`_${countText}`);
 }
 
 function getSettingsSurfaces() {
@@ -1071,8 +1089,11 @@ async function waitForProjectNewMedia(before, expectedCount, timeoutMs) {
 }
 
 async function saveCharacterReference(id, item, model) {
+  await migrateLegacyCharacterStorage();
   const src = item.src || item.tile.querySelector("img")?.currentSrc || item.tile.querySelector("img")?.src || "";
   const mediaName = getMediaNameFromUrl(src);
+  const projectId = getCurrentProjectId();
+  if (!projectId) throw new Error("현재 Flow 프로젝트 ID를 확인할 수 없습니다.");
   const refs = await loadCharacterReferences();
   const savedRef = {
     id,
@@ -1086,9 +1107,17 @@ async function saveCharacterReference(id, item, model) {
   refs[id] = savedRef;
   const library = await loadCharacterLibrary();
   library[id] = savedRef;
+  const trimmedLibrary = trimProjectLibrary(library);
+  const byProjectRefs = await loadCharacterRefsByProject();
+  const byProjectLibrary = await loadCharacterLibraryByProject();
+  const lastUsed = await loadProjectLastUsedMap();
+  byProjectRefs[projectId] = refs;
+  byProjectLibrary[projectId] = trimmedLibrary;
+  lastUsed[projectId] = Date.now();
   await chrome.storage.local.set({
-    characterRefs: refs,
-    characterLibrary: library
+    [CHARACTER_REFS_BY_PROJECT_KEY]: byProjectRefs,
+    [CHARACTER_LIBRARY_BY_PROJECT_KEY]: byProjectLibrary,
+    [PROJECT_LAST_USED_KEY]: lastUsed
   });
   console.info("[Flow Stepper] saved reference", id, refs[id]);
 }
@@ -1169,16 +1198,44 @@ async function downloadMedia(item, name) {
 
 function loadCharacterReferences() {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ characterRefs: {} }, (result) => {
-      resolve(result.characterRefs || {});
+    const projectId = getCurrentProjectId();
+    chrome.storage.local.get({ [CHARACTER_REFS_BY_PROJECT_KEY]: {} }, (result) => {
+      const refsByProject = result[CHARACTER_REFS_BY_PROJECT_KEY] || {};
+      resolve(projectId ? (refsByProject[projectId] || {}) : {});
     });
   });
 }
 
 function loadCharacterLibrary() {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ characterLibrary: {} }, (result) => {
-      resolve(result.characterLibrary || {});
+    const projectId = getCurrentProjectId();
+    chrome.storage.local.get({ [CHARACTER_LIBRARY_BY_PROJECT_KEY]: {} }, (result) => {
+      const libraryByProject = result[CHARACTER_LIBRARY_BY_PROJECT_KEY] || {};
+      resolve(projectId ? (libraryByProject[projectId] || {}) : {});
+    });
+  });
+}
+
+function loadCharacterRefsByProject() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [CHARACTER_REFS_BY_PROJECT_KEY]: {} }, (result) => {
+      resolve(result[CHARACTER_REFS_BY_PROJECT_KEY] || {});
+    });
+  });
+}
+
+function loadCharacterLibraryByProject() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [CHARACTER_LIBRARY_BY_PROJECT_KEY]: {} }, (result) => {
+      resolve(result[CHARACTER_LIBRARY_BY_PROJECT_KEY] || {});
+    });
+  });
+}
+
+function loadProjectLastUsedMap() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [PROJECT_LAST_USED_KEY]: {} }, (result) => {
+      resolve(result[PROJECT_LAST_USED_KEY] || {});
     });
   });
 }
@@ -1287,6 +1344,50 @@ function sanitizeFileName(value) {
 
 function normalize(value) {
   return (value || "").replace(/\s+/g, "");
+}
+
+function getCurrentProjectId() {
+  const match = location.href.match(/\/project\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function trimProjectLibrary(library) {
+  return Object.fromEntries(
+    Object.entries(library || {})
+      .filter(([, ref]) => ref)
+      .sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0))
+      .slice(0, MAX_REFS_PER_PROJECT)
+  );
+}
+
+async function migrateLegacyCharacterStorage() {
+  const projectId = getCurrentProjectId();
+  if (!projectId) return;
+  const scoped = await loadCharacterRefsByProject();
+  const scopedLibrary = await loadCharacterLibraryByProject();
+  const hasScoped = Object.keys(scoped).length > 0 || Object.keys(scopedLibrary).length > 0;
+  if (hasScoped) return;
+
+  const legacy = await new Promise((resolve) => {
+    chrome.storage.local.get({ characterRefs: {}, characterLibrary: {} }, (result) => {
+      resolve({
+        refs: result.characterRefs || {},
+        library: result.characterLibrary || {}
+      });
+    });
+  });
+  if (!Object.keys(legacy.refs).length && !Object.keys(legacy.library).length) return;
+
+  const merged = trimProjectLibrary({ ...legacy.library, ...legacy.refs });
+  const lastUsed = await loadProjectLastUsedMap();
+  await chrome.storage.local.set({
+    [CHARACTER_REFS_BY_PROJECT_KEY]: { [projectId]: legacy.refs },
+    [CHARACTER_LIBRARY_BY_PROJECT_KEY]: { [projectId]: merged },
+    [PROJECT_LAST_USED_KEY]: { ...lastUsed, [projectId]: Date.now() }
+  });
+  await new Promise((resolve) => {
+    chrome.storage.local.remove(["characterRefs", "characterLibrary"], () => resolve());
+  });
 }
 
 function delay(ms = FLOW_STEPPER.delayMs) {

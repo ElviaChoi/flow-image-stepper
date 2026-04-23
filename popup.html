@@ -77,7 +77,12 @@
 
         <div class="action-group">
           <h2>내보내기</h2>
-          <button id="downloadScenes" type="button" class="button-download">장면 이미지 다운로드</button>
+          <div class="button-grid">
+            <button id="downloadScenes" type="button" class="button-download">장면 이미지 다운로드</button>
+            <button id="exportLibrary" type="button">참조 백업(JSON)</button>
+            <button id="importLibrary" type="button">참조 복원(JSON)</button>
+          </div>
+          <input id="importFile" type="file" accept="application/json" hidden>
         </div>
       </section>
 

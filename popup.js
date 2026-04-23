@@ -5,12 +5,20 @@ const modelEl = document.getElementById("model");
 const sceneCountEl = document.getElementById("sceneCount");
 const aspectRatioEl = document.getElementById("aspectRatio");
 const debugEl = document.getElementById("debug");
+const exportLibraryEl = document.getElementById("exportLibrary");
+const importLibraryEl = document.getElementById("importLibrary");
+const importFileEl = document.getElementById("importFile");
 const promptEditorEl = document.getElementById("promptEditor");
 const settingsNoteEl = document.getElementById("settingsNote");
 
 const PRO_MODEL = "Nano Banana Pro";
 const PRO_MAX_SCENE_COUNT = 2;
 const CHARACTER_LIBRARY_KEY = "characterLibrary";
+const CHARACTER_LIBRARY_BY_PROJECT_KEY = "characterLibraryByProject";
+const CHARACTER_REFS_BY_PROJECT_KEY = "characterRefsByProject";
+const PROJECT_LAST_USED_KEY = "projectLastUsedAt";
+const MAX_REFS_PER_PROJECT = 200;
+const STALE_PROJECT_DAYS = 30;
 
 let parsed = null;
 let characterIndex = 0;
@@ -18,6 +26,10 @@ let sceneIndex = 0;
 let sceneOutputs = [];
 let characterRefs = {};
 let characterLibrary = {};
+let characterRefsByProject = {};
+let characterLibraryByProject = {};
+let projectLastUsedAt = {};
+let currentProjectId = "";
 let checkpoint = null;
 let editorKind = "characters";
 let editorIndex = 0;
@@ -25,26 +37,35 @@ let editorIndex = 0;
 init();
 
 function init() {
-  chrome.storage.local.get(["source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs", "characterRefs", CHARACTER_LIBRARY_KEY, "checkpoint", "model", "sceneCount", "aspectRatio", "debug"], (data) => {
-    if (data.source) sourceEl.value = data.source;
-    if (data.model) modelEl.value = data.model;
-    if (data.sceneCount) sceneCountEl.value = String(data.sceneCount);
-    if (data.aspectRatio) aspectRatioEl.value = data.aspectRatio;
-    if (debugEl) debugEl.checked = Boolean(data.debug);
-    enforceModelLimits({ persist: false });
-    sceneOutputs = data.sceneOutputs || [];
-    characterRefs = data.characterRefs || {};
-    characterLibrary = data[CHARACTER_LIBRARY_KEY] || {};
-    mergeRefsIntoCharacterLibrary(characterRefs);
-    checkpoint = data.checkpoint || null;
-    if (data.parsed) {
-      parsed = data.parsed;
-      characterIndex = data.characterIndex || 0;
-      sceneIndex = data.sceneIndex || 0;
-      editorKind = characterIndex < parsed.characters.length ? "characters" : "scenes";
-      editorIndex = editorKind === "characters" ? characterIndex : sceneIndex;
-      renderSummary();
-    }
+  migrateLegacyCharacterStorage().then(async () => {
+    await refreshCurrentProjectContext();
+    chrome.storage.local.get([
+      "source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs",
+      CHARACTER_REFS_BY_PROJECT_KEY, CHARACTER_LIBRARY_BY_PROJECT_KEY, PROJECT_LAST_USED_KEY,
+      "checkpoint", "model", "sceneCount", "aspectRatio", "debug"
+    ], (data) => {
+      if (data.source) sourceEl.value = data.source;
+      if (data.model) modelEl.value = data.model;
+      if (data.sceneCount) sceneCountEl.value = String(data.sceneCount);
+      if (data.aspectRatio) aspectRatioEl.value = data.aspectRatio;
+      if (debugEl) debugEl.checked = Boolean(data.debug);
+      enforceModelLimits({ persist: false });
+      sceneOutputs = data.sceneOutputs || [];
+      characterRefsByProject = data[CHARACTER_REFS_BY_PROJECT_KEY] || {};
+      characterLibraryByProject = data[CHARACTER_LIBRARY_BY_PROJECT_KEY] || {};
+      projectLastUsedAt = data[PROJECT_LAST_USED_KEY] || {};
+      characterRefs = getProjectBucket(characterRefsByProject, currentProjectId);
+      characterLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
+      checkpoint = data.checkpoint || null;
+      if (data.parsed) {
+        parsed = data.parsed;
+        characterIndex = data.characterIndex || 0;
+        sceneIndex = data.sceneIndex || 0;
+        editorKind = characterIndex < parsed.characters.length ? "characters" : "scenes";
+        editorIndex = editorKind === "characters" ? characterIndex : sceneIndex;
+        renderSummary();
+      }
+    });
   });
 
   document.getElementById("parse").addEventListener("click", parseInput);
@@ -54,6 +75,9 @@ function init() {
   document.getElementById("recoverScene").addEventListener("click", () => runRecoverScene());
   document.getElementById("backScene").addEventListener("click", () => backOneScene());
   document.getElementById("downloadScenes").addEventListener("click", () => runDownloadScenes());
+  exportLibraryEl?.addEventListener("click", exportCharacterLibraryBackup);
+  importLibraryEl?.addEventListener("click", () => importFileEl?.click());
+  importFileEl?.addEventListener("change", importCharacterLibraryBackup);
   document.getElementById("clearSource").addEventListener("click", clearSource);
   modelEl.addEventListener("change", saveSettings);
   sceneCountEl.addEventListener("change", saveSettings);
@@ -63,18 +87,22 @@ function init() {
 }
 
 async function parseInput() {
+  await refreshCurrentProjectContext();
   parsed = FlowPromptParser.parse(sourceEl.value);
   sceneIndex = 0;
   sceneOutputs = [];
-  characterRefs = await getRestoredCharacterRefs(parsed);
+  characterRefs = await getRestoredCharacterRefs(parsed, currentProjectId);
   characterIndex = getNextCharacterIndex(parsed, characterRefs);
   checkpoint = null;
+  if (currentProjectId) {
+    characterRefsByProject[currentProjectId] = characterRefs;
+  }
   chrome.storage.local.set({
     source: sourceEl.value,
     parsed,
     characterIndex,
     sceneIndex,
-    characterRefs,
+    [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject,
     sceneOutputs: [],
     checkpoint: null,
     ...getCurrentSettings()
@@ -98,8 +126,9 @@ function getReferencedCharacterIds(nextParsed) {
 
 function loadCharacterLibrary() {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ [CHARACTER_LIBRARY_KEY]: {} }, (result) => {
-      characterLibrary = result[CHARACTER_LIBRARY_KEY] || {};
+    chrome.storage.local.get({ [CHARACTER_LIBRARY_BY_PROJECT_KEY]: {} }, (result) => {
+      characterLibraryByProject = result[CHARACTER_LIBRARY_BY_PROJECT_KEY] || {};
+      characterLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
       resolve(characterLibrary);
     });
   });
@@ -110,7 +139,7 @@ function mergeRefsIntoCharacterLibrary(refs = {}) {
   if (!entries.length) return Promise.resolve(characterLibrary);
 
   let changed = false;
-  const nextLibrary = { ...characterLibrary };
+  const nextLibrary = { ...getProjectBucket(characterLibraryByProject, currentProjectId) };
   for (const [id, ref] of entries) {
     if (!nextLibrary[id] || nextLibrary[id].savedAt !== ref.savedAt) {
       nextLibrary[id] = ref;
@@ -119,13 +148,18 @@ function mergeRefsIntoCharacterLibrary(refs = {}) {
   }
   if (!changed) return Promise.resolve(characterLibrary);
 
-  characterLibrary = nextLibrary;
+  characterLibrary = trimProjectLibrary(nextLibrary);
+  characterLibraryByProject[currentProjectId] = characterLibrary;
+  projectLastUsedAt[currentProjectId] = Date.now();
   return new Promise((resolve) => {
-    chrome.storage.local.set({ [CHARACTER_LIBRARY_KEY]: characterLibrary }, () => resolve(characterLibrary));
+    chrome.storage.local.set({
+      [CHARACTER_LIBRARY_BY_PROJECT_KEY]: characterLibraryByProject,
+      [PROJECT_LAST_USED_KEY]: projectLastUsedAt
+    }, () => resolve(characterLibrary));
   });
 }
 
-async function getRestoredCharacterRefs(nextParsed) {
+async function getRestoredCharacterRefs(nextParsed, projectId = currentProjectId) {
   const library = await loadCharacterLibrary();
   const ids = getReferencedCharacterIds(nextParsed);
   const restored = {};
@@ -143,7 +177,12 @@ async function restoreCharacterReferencesFromLibrary() {
     return;
   }
 
-  const restored = await getRestoredCharacterRefs(parsed);
+  await refreshCurrentProjectContext();
+  if (!currentProjectId) {
+    setLog("Flow 프로젝트 탭을 열어야 참조를 복구할 수 있습니다.");
+    return;
+  }
+  const restored = await getRestoredCharacterRefs(parsed, currentProjectId);
   const availableIds = Object.keys(characterLibrary || {}).sort();
   const currentIds = [...getReferencedCharacterIds(parsed)];
   const matchedIds = Object.keys(restored).sort();
@@ -152,18 +191,24 @@ async function restoreCharacterReferencesFromLibrary() {
     ...characterRefs,
     ...restored
   };
+  characterRefsByProject[currentProjectId] = characterRefs;
+  projectLastUsedAt[currentProjectId] = Date.now();
   characterIndex = getNextCharacterIndex(parsed, characterRefs);
-  chrome.storage.local.set({ characterRefs, characterIndex }, () => {
+  chrome.storage.local.set({
+    [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject,
+    [PROJECT_LAST_USED_KEY]: projectLastUsedAt,
+    characterIndex
+  }, () => {
     renderSummary();
     const count = Object.keys(restored).length;
     setLog(count
       ? `Restored ${count} saved character reference(s): ${matchedIds.join(", ")}.`
-      : "No saved character references matched the current list.");
+      : "현재 프로젝트에서 매칭되는 저장 참조가 없습니다.");
     if (missingIds.length) {
       setLog(`Missing for current prompt: ${missingIds.join(", ")}.`);
     }
     if (availableIds.length) {
-      setLog(`Saved library: ${availableIds.join(", ")}.`);
+      setLog(`Project library: ${availableIds.join(", ")}.`);
     }
   });
 }
@@ -229,13 +274,21 @@ function buildCharacterSummary() {
 
 function buildLibrarySummary() {
   const card = createEl("div", "summary-card");
-  const libraryEntries = Object.entries(characterLibrary || {})
+  const projectLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
+  const libraryEntries = Object.entries(projectLibrary || {})
     .filter(([, ref]) => ref)
     .sort(([a], [b]) => a.localeCompare(b));
+  const staleProjects = getStaleProjectIds(projectLastUsedAt);
   card.append(createEl("h3", "", "저장된 캐릭터 참조"));
+  if (currentProjectId) {
+    card.append(createEl("div", "summary-empty", `현재 프로젝트: ${currentProjectId}`));
+  }
+  if (staleProjects.length) {
+    card.append(createEl("div", "summary-empty", `정리 권장 프로젝트 ${staleProjects.length}개 (30일 이상 미사용)`));
+  }
 
   if (!libraryEntries.length) {
-    card.append(createEl("div", "summary-empty", "아직 저장된 캐릭터 참조가 없습니다."));
+    card.append(createEl("div", "summary-empty", "현재 프로젝트에 저장된 캐릭터 참조가 없습니다."));
     return card;
   }
 
@@ -472,7 +525,12 @@ function setSelectedAsNext() {
     characterIndex = editorIndex;
     delete characterRefs[item.id];
     checkpoint = buildManualCheckpoint(`Character ${item.id}`);
-    chrome.storage.local.set({ characterIndex, characterRefs, checkpoint }, () => refreshSavedState());
+    characterRefsByProject[currentProjectId] = characterRefs;
+    chrome.storage.local.set({
+      characterIndex,
+      [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject,
+      checkpoint
+    }, () => refreshSavedState());
     setLog(`${item.id} 캐릭터를 다시 생성할 준비가 완료되었습니다. 기존 참조 기록은 삭제했습니다.`);
     return;
   }
@@ -532,6 +590,15 @@ function renderSceneOutputStatus() {
 
 async function runStep(action) {
   if (!parsed) await parseInput();
+  await refreshCurrentProjectContext();
+  if (!currentProjectId && action !== "runCharacters") {
+    setLog("현재 탭에서 Flow 프로젝트 ID를 찾지 못했습니다. 먼저 Flow 프로젝트 화면을 열어주세요.");
+    return;
+  }
+  if (!currentProjectId && action === "runCharacters") {
+    setLog("현재 프로젝트 ID가 아직 없습니다. 캐릭터 생성 중 Flow에서 프로젝트가 생성되면 자동으로 저장됩니다.");
+  }
+  await refreshSavedState({ render: false });
   const selected = selectNextItem(action);
   if (!selected) return;
   if (action === "runScenes" && !(await ensureSceneReferencesReady(selected.item))) {
@@ -548,6 +615,7 @@ async function runStep(action) {
     parsed: selected.parsed,
     settings: getCurrentSettings()
   };
+  if (currentProjectId) payload.settings.projectId = currentProjectId;
   payload.settings.characterCount = 1;
 
   navigator.clipboard.writeText(selected.prompt).catch(() => null).finally(() => {
@@ -566,6 +634,11 @@ async function runStep(action) {
 
 async function runRecoverScene() {
   if (!parsed) await parseInput();
+  await refreshCurrentProjectContext();
+  if (!currentProjectId) {
+    setLog("현재 탭에서 Flow 프로젝트 ID를 찾지 못했습니다.");
+    return;
+  }
   const selected = selectNextItem("runScenes");
   if (!selected) return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -580,7 +653,8 @@ async function runRecoverScene() {
     settings: {
       model: modelEl.value,
       sceneCount: getEffectiveSceneCount(),
-      debug: Boolean(debugEl?.checked)
+      debug: Boolean(debugEl?.checked),
+      projectId: currentProjectId
     }
   };
 
@@ -689,8 +763,14 @@ async function ensureSceneReferencesReady(scene) {
       ...characterRefs,
       ...restored
     };
+    characterRefsByProject[currentProjectId] = characterRefs;
+    projectLastUsedAt[currentProjectId] = Date.now();
     characterIndex = getNextCharacterIndex(parsed, characterRefs);
-    await chrome.storage.local.set({ characterRefs, characterIndex });
+    await chrome.storage.local.set({
+      [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject,
+      [PROJECT_LAST_USED_KEY]: projectLastUsedAt,
+      characterIndex
+    });
   }
   const missing = getMissingSceneReferences(scene);
   if (!missing.length) return true;
@@ -744,10 +824,18 @@ function buildManualCheckpoint(label) {
 
 function refreshSavedState(options = { render: true }) {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ sceneOutputs: [], characterRefs: {}, [CHARACTER_LIBRARY_KEY]: {} }, (data) => {
+    chrome.storage.local.get({
+      sceneOutputs: [],
+      [CHARACTER_REFS_BY_PROJECT_KEY]: {},
+      [CHARACTER_LIBRARY_BY_PROJECT_KEY]: {},
+      [PROJECT_LAST_USED_KEY]: {}
+    }, (data) => {
       sceneOutputs = data.sceneOutputs || [];
-      characterRefs = data.characterRefs || {};
-      characterLibrary = data[CHARACTER_LIBRARY_KEY] || {};
+      characterRefsByProject = data[CHARACTER_REFS_BY_PROJECT_KEY] || {};
+      characterLibraryByProject = data[CHARACTER_LIBRARY_BY_PROJECT_KEY] || {};
+      projectLastUsedAt = data[PROJECT_LAST_USED_KEY] || {};
+      characterRefs = getProjectBucket(characterRefsByProject, currentProjectId);
+      characterLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
       if (options.render) renderSummary();
       resolve();
     });
@@ -853,6 +941,165 @@ async function clearSource() {
   summaryEl.classList.remove("summary-dashboard");
   summaryEl.textContent = "아직 목록이 없습니다.";
   logEl.textContent = "";
-  chrome.storage.local.remove(["source", "parsed", "characterIndex", "sceneIndex", "characterRefs", "sceneOutputs", "checkpoint"]);
+  if (currentProjectId) {
+    characterRefsByProject[currentProjectId] = {};
+  }
+  chrome.storage.local.set({ [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject });
+  chrome.storage.local.remove(["source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs", "checkpoint"]);
   renderPromptEditor();
+}
+
+function getProjectBucket(map, projectId) {
+  if (!projectId) return {};
+  return map?.[projectId] || {};
+}
+
+function trimProjectLibrary(library) {
+  const entries = Object.entries(library || {})
+    .filter(([, ref]) => ref)
+    .sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0));
+  return Object.fromEntries(entries.slice(0, MAX_REFS_PER_PROJECT));
+}
+
+function getStaleProjectIds(lastUsedMap = {}) {
+  const cutoff = Date.now() - (STALE_PROJECT_DAYS * 24 * 60 * 60 * 1000);
+  return Object.entries(lastUsedMap)
+    .filter(([, savedAt]) => Number(savedAt || 0) > 0 && Number(savedAt) < cutoff)
+    .map(([projectId]) => projectId)
+    .sort();
+}
+
+function extractFlowProjectId(url = "") {
+  const match = url.match(/\/project\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+async function refreshCurrentProjectContext() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  currentProjectId = extractFlowProjectId(tab?.url || "");
+  return currentProjectId;
+}
+
+function migrateLegacyCharacterStorage() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({
+      [CHARACTER_REFS_BY_PROJECT_KEY]: {},
+      [CHARACTER_LIBRARY_BY_PROJECT_KEY]: {},
+      [PROJECT_LAST_USED_KEY]: {},
+      characterRefs: {},
+      [CHARACTER_LIBRARY_KEY]: {}
+    }, async (data) => {
+      const byProjectRefs = data[CHARACTER_REFS_BY_PROJECT_KEY] || {};
+      const byProjectLibrary = data[CHARACTER_LIBRARY_BY_PROJECT_KEY] || {};
+      const hasScoped = Object.keys(byProjectRefs).length || Object.keys(byProjectLibrary).length;
+      if (hasScoped) {
+        resolve();
+        return;
+      }
+
+      const legacyRefs = data.characterRefs || {};
+      const legacyLibrary = data[CHARACTER_LIBRARY_KEY] || {};
+      if (!Object.keys(legacyRefs).length && !Object.keys(legacyLibrary).length) {
+        resolve();
+        return;
+      }
+
+      const projectId = await refreshCurrentProjectContext();
+      const fallback = projectId || "legacy";
+      const mergedLibrary = trimProjectLibrary({
+        ...legacyLibrary,
+        ...legacyRefs
+      });
+      const now = Date.now();
+      chrome.storage.local.set({
+        [CHARACTER_REFS_BY_PROJECT_KEY]: { [fallback]: { ...legacyRefs } },
+        [CHARACTER_LIBRARY_BY_PROJECT_KEY]: { [fallback]: mergedLibrary },
+        [PROJECT_LAST_USED_KEY]: { [fallback]: now }
+      }, () => {
+        chrome.storage.local.remove(["characterRefs", CHARACTER_LIBRARY_KEY], () => resolve());
+      });
+    });
+  });
+}
+
+function exportCharacterLibraryBackup() {
+  const payload = {
+    schemaVersion: 1,
+    exportedAt: Date.now(),
+    data: {
+      [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject || {},
+      [CHARACTER_LIBRARY_BY_PROJECT_KEY]: characterLibraryByProject || {},
+      [PROJECT_LAST_USED_KEY]: projectLastUsedAt || {}
+    }
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  anchor.href = url;
+  anchor.download = `flow-stepper-library-backup-${stamp}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  setLog("캐릭터 참조 백업(JSON)을 다운로드했습니다.");
+}
+
+function importCharacterLibraryBackup(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsedJson = JSON.parse(String(reader.result || "{}"));
+      const backupRefs = parsedJson?.data?.[CHARACTER_REFS_BY_PROJECT_KEY];
+      const backupLibrary = parsedJson?.data?.[CHARACTER_LIBRARY_BY_PROJECT_KEY];
+      const backupLastUsed = parsedJson?.data?.[PROJECT_LAST_USED_KEY];
+      if (!backupRefs || !backupLibrary || !backupLastUsed) {
+        throw new Error("백업 포맷이 올바르지 않습니다.");
+      }
+
+      const mergedRefs = { ...characterRefsByProject };
+      const mergedLibrary = { ...characterLibraryByProject };
+      const mergedLastUsed = { ...projectLastUsedAt };
+
+      for (const [projectId, refs] of Object.entries(backupRefs)) {
+        mergedRefs[projectId] = { ...(mergedRefs[projectId] || {}), ...(refs || {}) };
+      }
+
+      for (const [projectId, library] of Object.entries(backupLibrary)) {
+        const current = mergedLibrary[projectId] || {};
+        const incoming = library || {};
+        const next = { ...current };
+        for (const [id, ref] of Object.entries(incoming)) {
+          if (!next[id] || (next[id].savedAt || 0) < (ref?.savedAt || 0)) {
+            next[id] = ref;
+          }
+        }
+        mergedLibrary[projectId] = trimProjectLibrary(next);
+      }
+
+      for (const [projectId, savedAt] of Object.entries(backupLastUsed)) {
+        mergedLastUsed[projectId] = Math.max(Number(mergedLastUsed[projectId] || 0), Number(savedAt || 0));
+      }
+
+      characterRefsByProject = mergedRefs;
+      characterLibraryByProject = mergedLibrary;
+      projectLastUsedAt = mergedLastUsed;
+      characterRefs = getProjectBucket(characterRefsByProject, currentProjectId);
+      characterLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
+
+      chrome.storage.local.set({
+        [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject,
+        [CHARACTER_LIBRARY_BY_PROJECT_KEY]: characterLibraryByProject,
+        [PROJECT_LAST_USED_KEY]: projectLastUsedAt
+      }, () => {
+        renderSummary();
+        setLog("캐릭터 참조 백업(JSON)을 복원했습니다.");
+      });
+    } catch (error) {
+      setLog(`백업 복원 실패: ${error.message}`);
+    } finally {
+      if (importFileEl) importFileEl.value = "";
+    }
+  };
+  reader.readAsText(file);
 }
