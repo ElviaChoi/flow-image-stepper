@@ -108,7 +108,11 @@ async function parseInput() {
     ...getCurrentSettings()
   });
   renderSummary();
-  setLog("캐릭터/장면 목록을 만들었습니다.");
+  if (parsed.mode === "simple-scenes") {
+    setLog(`장면 헤더가 없어 빈 줄 기준으로 ${parsed.scenes.length}개 장면을 만들었습니다. 캐릭터 참조는 적용되지 않습니다.`);
+  } else {
+    setLog("캐릭터/장면 목록을 만들었습니다.");
+  }
 }
 
 function getReferencedCharacterIds(nextParsed) {
@@ -243,12 +247,21 @@ function buildOverviewSummary() {
 
   card.append(
     createEl("h3", "", "다음 작업"),
+    buildMetricRow("모드", getParseModeLabel(), getParseModeDetail()),
     buildMetricRow("캐릭터", nextCharacter ? nextCharacter.id : "완료", `${Math.min(characterIndex, parsed.characters.length)} / ${parsed.characters.length} 완료`),
     buildMetricRow("장면", nextScene ? String(nextScene.index).padStart(3, "0") : "완료", `${Math.min(sceneIndex, parsed.scenes.length)} / ${parsed.scenes.length} 완료`),
     buildMetricRow("모델", modelEl.value, `x${getEffectiveSceneCount()}, ${aspectRatioEl.value}`),
     createEl("div", "summary-last", `마지막 저장: ${last}`)
   );
   return card;
+}
+
+function getParseModeLabel() {
+  return parsed?.mode === "simple-scenes" ? "간단 장면" : "정식 포맷";
+}
+
+function getParseModeDetail() {
+  return parsed?.mode === "simple-scenes" ? "캐릭터 참조 없음" : "캐릭터 참조 사용";
 }
 
 function buildCharacterSummary() {
@@ -274,6 +287,13 @@ function buildCharacterSummary() {
 
 function buildLibrarySummary() {
   const card = createEl("div", "summary-card");
+  if (parsed.mode === "simple-scenes") {
+    card.append(
+      createEl("h3", "", "캐릭터 참조"),
+      createEl("div", "summary-empty", "간단 장면 모드에서는 캐릭터 참조를 사용하지 않습니다.")
+    );
+    return card;
+  }
   const projectLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
   const libraryEntries = Object.entries(projectLibrary || {})
     .filter(([, ref]) => ref)
@@ -591,16 +611,19 @@ function renderSceneOutputStatus() {
 async function runStep(action) {
   if (!parsed) await parseInput();
   await refreshCurrentProjectContext();
-  if (!currentProjectId && action !== "runCharacters") {
-    setLog("현재 탭에서 Flow 프로젝트 ID를 찾지 못했습니다. 먼저 Flow 프로젝트 화면을 열어주세요.");
-    return;
-  }
-  if (!currentProjectId && action === "runCharacters") {
-    setLog("현재 프로젝트 ID가 아직 없습니다. 캐릭터 생성 중 Flow에서 프로젝트가 생성되면 자동으로 저장됩니다.");
-  }
   await refreshSavedState({ render: false });
   const selected = selectNextItem(action);
   if (!selected) return;
+  if (!currentProjectId) {
+    if (action === "runCharacters") {
+      setLog("현재 프로젝트 ID가 아직 없습니다. 캐릭터 생성 중 Flow에서 프로젝트가 생성되면 자동으로 저장됩니다.");
+    } else if (action === "runScenes" && !getMissingSceneReferences(selected.item).length) {
+      setLog("캐릭터 참조가 없는 장면입니다. Flow에서 새 프로젝트를 열어 장면 생성을 시작합니다.");
+    } else {
+      setLog("캐릭터 참조가 필요한 장면은 Flow 프로젝트 화면을 먼저 열어주세요.");
+      return;
+    }
+  }
   if (action === "runScenes" && !(await ensureSceneReferencesReady(selected.item))) {
     return;
   }
@@ -758,6 +781,11 @@ function getMissingSceneReferences(scene) {
 async function ensureSceneReferencesReady(scene) {
   await refreshSavedState({ render: false });
   if (scene?.references?.some((id) => !characterRefs[id])) {
+    if (!currentProjectId) {
+      renderSummary();
+      setLog("이 장면은 캐릭터 참조가 필요합니다. 먼저 Flow 프로젝트 화면을 열어 캐릭터 참조를 불러오거나 생성해 주세요.");
+      return false;
+    }
     const restored = await getRestoredCharacterRefs(parsed);
     characterRefs = {
       ...characterRefs,

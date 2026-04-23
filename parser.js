@@ -68,11 +68,39 @@
     });
   }
 
+  function parseSimpleScenes(source) {
+    const prompts = normalizePrompt(source)
+      .split(/\n\s*\n+/)
+      .map((value) => normalizePrompt(value))
+      .filter(Boolean);
+    const total = prompts.length;
+    return prompts.map((prompt, index) => ({
+      index: index + 1,
+      total,
+      placement: "",
+      castLine: "참조 없음",
+      references: [],
+      chapter: "",
+      prompt,
+      status: "pending"
+    }));
+  }
+
   function parseFlowPrompt(source) {
     const text = source.replace(/\r\n/g, "\n");
+    const characters = parseCharacters(text).filter((item) => item.prompt);
+    const scenes = parseScenes(text).filter((item) => item.prompt);
+    if (characters.length || scenes.length) {
+      return {
+        mode: "structured",
+        characters,
+        scenes
+      };
+    }
     return {
-      characters: parseCharacters(text).filter((item) => item.prompt),
-      scenes: parseScenes(text).filter((item) => item.prompt)
+      mode: "simple-scenes",
+      characters: [],
+      scenes: parseSimpleScenes(text)
     };
   }
 
