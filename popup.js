@@ -238,11 +238,47 @@ function renderSummary() {
   summaryEl.innerHTML = "";
   summaryEl.append(
     buildOverviewSummary(),
-    buildLibrarySummary(),
-    buildCharacterSummary(),
-    buildSceneSummary()
+    buildSummaryAccordion("저장된 캐릭터 참조", getLibraryAccordionDetail(), buildLibrarySummary()),
+    buildSummaryAccordion("캐릭터 참조 상태", getCharacterAccordionDetail(), buildCharacterSummary()),
+    buildSummaryAccordion("장면 결과 상태", getSceneAccordionDetail(), buildSceneSummary())
   );
   renderPromptEditor();
+}
+
+function buildSummaryAccordion(title, detail, content, options = {}) {
+  const accordion = document.createElement("details");
+  accordion.className = "summary-accordion";
+  if (options.open) accordion.open = true;
+
+  const summary = document.createElement("summary");
+  summary.append(
+    createEl("span", "summary-accordion-title", title),
+    createEl("span", "summary-accordion-detail", detail)
+  );
+
+  const body = createEl("div", "summary-accordion-body");
+  body.append(content);
+  accordion.append(summary, body);
+  return accordion;
+}
+
+function getLibraryAccordionDetail() {
+  const count = Object.keys(getProjectBucket(characterLibraryByProject, currentProjectId) || {}).length;
+  if (parsed?.mode === "simple-scenes") return "간단 장면 모드";
+  return count ? `${count}개 저장` : "저장된 참조 없음";
+}
+
+function getCharacterAccordionDetail() {
+  const total = parsed?.characters?.length || 0;
+  if (!total) return "캐릭터 없음";
+  const ready = parsed.characters.filter((character) => Boolean(characterRefs[character.id])).length;
+  return `${ready} / ${total} 준비`;
+}
+
+function getSceneAccordionDetail() {
+  const total = parsed?.scenes?.length || 0;
+  if (!total) return "장면 없음";
+  return `${getSavedSceneCount()} / ${total} 저장`;
 }
 
 function onPromptEditorAccordionToggle() {
@@ -303,7 +339,6 @@ function getParseModeDetail() {
 
 function buildCharacterSummary() {
   const card = createEl("div", "summary-card");
-  card.append(createEl("h3", "", "캐릭터 참조 상태"));
   if (!parsed.characters.length) {
     card.append(createEl("div", "summary-empty", "캐릭터 프롬프트가 없습니다."));
     return card;
@@ -326,7 +361,6 @@ function buildLibrarySummary() {
   const card = createEl("div", "summary-card");
   if (parsed.mode === "simple-scenes") {
     card.append(
-      createEl("h3", "", "캐릭터 참조"),
       createEl("div", "summary-empty", "간단 장면 모드에서는 캐릭터 참조를 사용하지 않습니다.")
     );
     return card;
@@ -336,7 +370,6 @@ function buildLibrarySummary() {
     .filter(([, ref]) => ref)
     .sort(([a], [b]) => a.localeCompare(b));
   const staleProjects = getStaleProjectIds(projectLastUsedAt);
-  card.append(createEl("h3", "", "저장된 캐릭터 참조"));
   if (currentProjectId) {
     card.append(createEl("div", "summary-empty", `현재 프로젝트: ${currentProjectId}`));
   }
@@ -368,7 +401,6 @@ function buildLibrarySummary() {
 
 function buildSceneSummary() {
   const card = createEl("div", "summary-card");
-  card.append(createEl("h3", "", "장면 결과 상태"));
   if (!parsed.scenes.length) {
     card.append(createEl("div", "summary-empty", "장면 프롬프트가 없습니다."));
     return card;

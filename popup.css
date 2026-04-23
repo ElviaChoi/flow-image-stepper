@@ -343,8 +343,63 @@ button:disabled {
 .summary-dashboard {
   display: grid;
   gap: 10px;
-  max-height: 320px;
+  max-height: none;
+  overflow: visible;
   white-space: normal;
+}
+
+.summary-accordion {
+  border: 1px solid #263442;
+  border-radius: 8px;
+  background: #101720;
+}
+
+.summary-accordion summary {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  position: relative;
+  padding-right: 28px;
+}
+
+.summary-accordion summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary-accordion summary::before {
+  content: "▸";
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  color: #89a1b4;
+  font-size: 12px;
+  transition: transform 120ms ease;
+}
+
+.summary-accordion[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.summary-accordion-title {
+  color: #f3f7fb;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.summary-accordion-detail {
+  color: #9fb0bf;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.summary-accordion-body {
+  padding: 0 0 10px;
+}
+
+.summary-accordion .summary-card {
+  margin: 0 10px;
 }
 
 .summary-card {
