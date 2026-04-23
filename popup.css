@@ -137,10 +137,15 @@ select {
 
 .generation-grid {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  row-gap: 8px;
 }
 
 .button-wide {
   grid-column: 1 / -1;
+}
+
+.generation-grid .button-wide {
+  margin-top: 1px;
 }
 
 .advanced-tools {
@@ -233,11 +238,16 @@ button {
   font-weight: 700;
   line-height: 1.35;
   white-space: normal;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  border-color: #344454;
+  background: linear-gradient(180deg, #1a2530 0%, #16202a 100%);
+  color: #e8eef6;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 button:hover {
-  background: #202b35;
+  background: linear-gradient(180deg, #233243 0%, #1b2733 100%);
+  border-color: #58708a;
 }
 
 button:disabled {
@@ -245,35 +255,70 @@ button:disabled {
   opacity: 0.5;
 }
 
-.button-primary {
-  border-color: #3b82f6;
-  background: #2563eb;
+.button-primary,
+#parse,
+#runScenes {
+  border-color: #5c94ff;
+  background: linear-gradient(180deg, #4a86ff 0%, #2f6ae2 100%);
   color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 1px rgba(76, 141, 255, 0.12);
 }
 
-.button-primary:hover {
-  background: #1d4ed8;
+.button-primary:hover,
+#parse:hover,
+#runScenes:hover {
+  background: linear-gradient(180deg, #5a91ff 0%, #3972e5 100%);
+  border-color: #89b1ff;
 }
 
-.button-download {
+#runCharacters,
+#restoreRefs,
+#recoverScene,
+#backScene,
+#exportLibrary,
+#importLibrary {
+  border-color: #3b4d5e;
+  background: linear-gradient(180deg, #1c2834 0%, #17212b 100%);
+  color: #e6edf6;
+}
+
+#runCharacters:hover,
+#restoreRefs:hover,
+#recoverScene:hover,
+#backScene:hover,
+#exportLibrary:hover,
+#importLibrary:hover {
+  background: linear-gradient(180deg, #253546 0%, #1d2936 100%);
+  border-color: #60778f;
+}
+
+.button-download,
+#downloadScenes {
   width: 100%;
-  border-color: #22c55e;
-  background: #15803d;
-  color: #ffffff;
+  border-color: #2f8b73;
+  background: linear-gradient(180deg, #1f9b63 0%, #19834f 100%);
+  color: #eefbff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
-.button-download:hover {
-  background: #166534;
+.button-download:hover,
+#downloadScenes:hover {
+  background: linear-gradient(180deg, #26a96d 0%, #1c8d58 100%);
+  border-color: #49a78b;
 }
 
-.button-muted {
-  border-color: #57414a;
-  background: #261f24;
-  color: #f1dfe5;
+.button-muted,
+#clearSource {
+  border-color: #9f5d6b;
+  background: linear-gradient(180deg, #6d3341 0%, #552833 100%);
+  color: #fff1f4;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.button-muted:hover {
-  background: #34262e;
+.button-muted:hover,
+#clearSource:hover {
+  background: linear-gradient(180deg, #7b3b4b 0%, #61303b 100%);
+  border-color: #bd7686;
 }
 
 .panel {
