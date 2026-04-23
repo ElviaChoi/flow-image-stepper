@@ -8,7 +8,9 @@ const debugEl = document.getElementById("debug");
 const exportLibraryEl = document.getElementById("exportLibrary");
 const importLibraryEl = document.getElementById("importLibrary");
 const importFileEl = document.getElementById("importFile");
+const promptEditorAccordionEl = document.getElementById("promptEditorAccordion");
 const promptEditorEl = document.getElementById("promptEditor");
+const promptEditorSummaryEl = document.getElementById("promptEditorSummary");
 const settingsNoteEl = document.getElementById("settingsNote");
 
 const PRO_MODEL = "Nano Banana Pro";
@@ -17,6 +19,7 @@ const CHARACTER_LIBRARY_KEY = "characterLibrary";
 const CHARACTER_LIBRARY_BY_PROJECT_KEY = "characterLibraryByProject";
 const CHARACTER_REFS_BY_PROJECT_KEY = "characterRefsByProject";
 const PROJECT_LAST_USED_KEY = "projectLastUsedAt";
+const PROMPT_EDITOR_EXPANDED_KEY = "promptEditorExpanded";
 const MAX_REFS_PER_PROJECT = 200;
 const STALE_PROJECT_DAYS = 30;
 
@@ -33,6 +36,7 @@ let currentProjectId = "";
 let checkpoint = null;
 let editorKind = "characters";
 let editorIndex = 0;
+let promptEditorExpanded = false;
 
 init();
 
@@ -42,7 +46,7 @@ function init() {
     chrome.storage.local.get([
       "source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs",
       CHARACTER_REFS_BY_PROJECT_KEY, CHARACTER_LIBRARY_BY_PROJECT_KEY, PROJECT_LAST_USED_KEY,
-      "checkpoint", "model", "sceneCount", "aspectRatio", "debug"
+      "checkpoint", "model", "sceneCount", "aspectRatio", "debug", PROMPT_EDITOR_EXPANDED_KEY
     ], (data) => {
       if (data.source) sourceEl.value = data.source;
       if (data.model) modelEl.value = data.model;
@@ -57,6 +61,8 @@ function init() {
       characterRefs = getProjectBucket(characterRefsByProject, currentProjectId);
       characterLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
       checkpoint = data.checkpoint || null;
+      promptEditorExpanded = Boolean(data[PROMPT_EDITOR_EXPANDED_KEY]);
+      syncPromptEditorAccordion();
       if (data.parsed) {
         parsed = data.parsed;
         characterIndex = data.characterIndex || 0;
@@ -83,7 +89,9 @@ function init() {
   sceneCountEl.addEventListener("change", saveSettings);
   aspectRatioEl.addEventListener("change", saveSettings);
   if (debugEl) debugEl.addEventListener("change", saveSettings);
+  promptEditorAccordionEl?.addEventListener("toggle", onPromptEditorAccordionToggle);
   updateSettingsNote();
+  updatePromptEditorAccordionSummary();
 }
 
 async function parseInput() {
@@ -235,6 +243,35 @@ function renderSummary() {
     buildSceneSummary()
   );
   renderPromptEditor();
+}
+
+function onPromptEditorAccordionToggle() {
+  promptEditorExpanded = Boolean(promptEditorAccordionEl?.open);
+  chrome.storage.local.set({ [PROMPT_EDITOR_EXPANDED_KEY]: promptEditorExpanded });
+}
+
+function syncPromptEditorAccordion() {
+  if (!promptEditorAccordionEl) return;
+  promptEditorAccordionEl.open = promptEditorExpanded;
+}
+
+function updatePromptEditorAccordionSummary() {
+  if (!promptEditorSummaryEl) return;
+  if (!parsed) {
+    promptEditorSummaryEl.textContent = "필요할 때 펼쳐서 프롬프트를 수정할 수 있습니다.";
+    return;
+  }
+  const items = getEditorItems();
+  const selected = items[clampEditorIndex(editorIndex, items.length)];
+  if (!selected) {
+    promptEditorSummaryEl.textContent = "수정할 항목이 없습니다.";
+    return;
+  }
+  if (editorKind === "characters") {
+    promptEditorSummaryEl.textContent = `현재 대상: ${selected.id}`;
+    return;
+  }
+  promptEditorSummaryEl.textContent = `현재 대상: 장면 ${String(selected.index).padStart(3, "0")} / ${selected.total}`;
 }
 
 function buildOverviewSummary() {
@@ -406,6 +443,7 @@ function renderPromptEditor() {
   if (!parsed) {
     promptEditorEl.classList.add("empty");
     promptEditorEl.textContent = "프롬프트를 수정하고 다시 생성 준비를 누르면 해당 캐릭터나 장면부터 다시 만들 수 있습니다.";
+    updatePromptEditorAccordionSummary();
     return;
   }
 
@@ -459,6 +497,7 @@ function renderPromptEditor() {
   );
 
   promptEditorEl.append(tabs, select, meta, textarea, actions);
+  updatePromptEditorAccordionSummary();
 }
 
 function buildEditorTab(kind, label) {
@@ -985,6 +1024,8 @@ async function clearSource() {
   sceneOutputs = [];
   characterRefs = {};
   checkpoint = null;
+  editorKind = "characters";
+  editorIndex = 0;
   sourceEl.value = "";
   summaryEl.classList.add("empty");
   summaryEl.classList.remove("summary-dashboard");

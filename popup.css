@@ -175,6 +175,57 @@ select {
   margin-top: 6px;
 }
 
+.prompt-editor-accordion {
+  margin-top: 10px;
+  border: 1px solid #2e3a46;
+  border-radius: 8px;
+  background: #132131;
+  box-shadow: inset 0 0 0 1px rgba(73, 129, 196, 0.12);
+}
+
+.prompt-editor-accordion summary {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.prompt-editor-accordion summary::-webkit-details-marker {
+  display: none;
+}
+
+.prompt-editor-accordion summary::before {
+  content: "▸";
+  position: absolute;
+  right: 12px;
+  top: 14px;
+  color: #89a1b4;
+  font-size: 12px;
+  transition: transform 120ms ease;
+}
+
+.prompt-editor-accordion[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.prompt-editor-accordion summary {
+  position: relative;
+  padding-right: 28px;
+}
+
+.accordion-title {
+  color: #f3f7fb;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.accordion-summary {
+  color: #b8cbe0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 button {
   min-height: 36px;
   padding: 8px 10px;
@@ -351,6 +402,7 @@ button:disabled {
   display: grid;
   gap: 8px;
   max-height: none;
+  margin: 0 10px 10px;
 }
 
 .editor-tabs,
