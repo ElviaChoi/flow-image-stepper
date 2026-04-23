@@ -135,6 +135,14 @@ select {
   gap: 8px;
 }
 
+.generation-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.button-wide {
+  grid-column: 1 / -1;
+}
+
 .advanced-tools {
   border: 1px solid #2e3a46;
   border-radius: 8px;

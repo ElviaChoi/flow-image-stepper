@@ -52,20 +52,20 @@
       <section class="actions">
         <div class="action-group">
           <h2>준비</h2>
-          <p class="action-hint">프롬프트를 파싱해서 캐릭터/장면 순서를 준비합니다.</p>
+          <p class="action-hint">전체 프롬프트를 캐릭터와 장면 목록으로 나눕니다.</p>
           <div class="button-grid">
-            <button id="parse" class="button-primary">목록 만들기</button>
-            <button id="clearSource" type="button" class="button-muted">전체 작업 초기화</button>
+            <button id="parse" class="button-primary">프롬프트 목록 만들기</button>
+            <button id="clearSource" type="button" class="button-muted">작업 초기화</button>
           </div>
         </div>
 
         <div class="action-group">
           <h2>생성</h2>
-          <p class="action-hint">캐릭터 시트를 먼저 만들고, 저장된 참조로 장면을 생성합니다.</p>
-          <div class="button-grid">
-            <button id="runCharacters" title="캐릭터 시트를 1장 생성하고 참조로 저장합니다.">다음 캐릭터 생성</button>
-            <button id="runScenes" class="button-primary">다음 장면 생성</button>
-            <button id="restoreRefs" type="button" title="현재 프로젝트에 저장된 참조를 복구합니다.">참조 불러오기</button>
+          <p class="action-hint">캐릭터 시트를 먼저 만들고, 저장된 캐릭터 참조로 장면을 생성합니다.</p>
+          <div class="button-grid generation-grid">
+            <button id="runCharacters" title="캐릭터 시트를 1장 생성하고 참조로 저장합니다.">다음 캐릭터 시트 생성</button>
+            <button id="runScenes" class="button-primary">다음 장면 이미지 생성</button>
+            <button id="restoreRefs" type="button" class="button-wide" title="현재 프로젝트에 저장된 캐릭터 참조를 불러옵니다.">저장된 캐릭터 참조 불러오기</button>
           </div>
         </div>
 
@@ -79,10 +79,10 @@
           <summary>고급 도구</summary>
           <p class="action-hint">오류 복구나 데이터 이전이 필요할 때만 사용하세요.</p>
           <div class="button-grid">
-            <button id="recoverScene" type="button" title="방금 생성된 결과를 현재 장면 결과로 저장합니다.">최신 결과 저장</button>
-            <button id="backScene" type="button" title="현재 장면으로 되돌아가 다시 생성할 수 있게 준비합니다.">장면 다시 생성</button>
-            <button id="exportLibrary" type="button" title="프로젝트별 캐릭터 참조를 JSON으로 백업합니다.">참조 백업(JSON)</button>
-            <button id="importLibrary" type="button" title="백업한 JSON에서 프로젝트별 캐릭터 참조를 복원합니다.">참조 복원(JSON)</button>
+            <button id="recoverScene" type="button" title="방금 생성된 결과를 현재 장면 결과로 저장합니다.">최신 장면 결과 저장</button>
+            <button id="backScene" type="button" title="이전 장면으로 돌아가 다시 생성할 수 있게 준비합니다.">이전 장면 다시 생성</button>
+            <button id="exportLibrary" type="button" title="프로젝트별 캐릭터 참조를 JSON으로 백업합니다.">캐릭터 참조 백업(JSON)</button>
+            <button id="importLibrary" type="button" title="백업한 JSON에서 프로젝트별 캐릭터 참조를 복원합니다.">캐릭터 참조 복원(JSON)</button>
           </div>
           <input id="importFile" type="file" accept="application/json" hidden>
         </details>

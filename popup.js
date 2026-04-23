@@ -262,7 +262,7 @@ function buildCharacterSummary() {
   for (const [index, character] of parsed.characters.entries()) {
     const ref = characterRefs[character.id];
     const status = getProgressStatus(index, characterIndex);
-    const savedText = ref ? `저장됨${ref.model ? ` / ${ref.model}` : ""}` : "참조 없음";
+    const savedText = ref ? `참조 저장됨${ref.model ? ` / ${ref.model}` : ""}` : "캐릭터 참조 없음";
     card.append(buildStatusRow({
       title: character.id,
       detail: ref?.mediaName || savedText,
@@ -288,7 +288,7 @@ function buildLibrarySummary() {
   }
 
   if (!libraryEntries.length) {
-    card.append(createEl("div", "summary-empty", "현재 프로젝트에 저장된 캐릭터 참조가 없습니다."));
+    card.append(createEl("div", "summary-empty", "현재 프로젝트에 불러올 캐릭터 참조가 없습니다."));
     return card;
   }
 
@@ -300,10 +300,10 @@ function buildLibrarySummary() {
       title: id,
       detail: ref.mediaName || ref.href || "saved",
       status: isLoaded
-        ? { label: "불러옴", className: "is-done" }
+        ? { label: "사용 중", className: "is-done" }
         : isCurrent
-          ? { label: "매칭", className: "is-next" }
-          : { label: "보관", className: "is-todo" }
+          ? { label: "불러오기", className: "is-next" }
+          : { label: "보관 중", className: "is-todo" }
     }));
   }
   return card;
