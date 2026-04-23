@@ -13,9 +13,13 @@ const K = {
 
 const FLOW_STEPPER = {
   running: false,
-  delayMs: 350,
+  delayMs: 180,
   debug: false
 };
+const REFERENCE_SEARCH_SETTLE_MS = 120;
+const REFERENCE_FIND_INTERVAL_MS = 80;
+const REFERENCE_ATTACH_TIMEOUT_MS = 1400;
+const REFERENCE_ATTACH_INTERVAL_MS = 100;
 const CHARACTER_REFS_BY_PROJECT_KEY = "characterRefsByProject";
 const CHARACTER_LIBRARY_BY_PROJECT_KEY = "characterLibraryByProject";
 const PROJECT_LAST_USED_KEY = "projectLastUsedAt";
@@ -733,24 +737,24 @@ async function attachReference(name) {
 
   const search = getAssetPickerSearchInput();
   // Fast path: picker가 이미 최신 목록 상태면 바로 찾는다.
-  let image = await waitFor(() => findReferenceImage(name, savedRef, refs), 1500, 120).catch(() => null);
+  let image = await waitFor(() => findReferenceImage(name, savedRef, refs), 1500, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
 
   // Fallback 1: 검색어를 비우고 짧게 다시 시도한다.
   if (!image && search) {
     setInputValue(search, "");
-    await delay(220);
-    image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, 120).catch(() => null);
+    await delay(REFERENCE_SEARCH_SETTLE_MS);
+    image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
   }
 
   // Fallback 2: 이름으로 좁혀서 찾는다.
   if (!image && search) {
     setInputValue(search, name);
-    await delay(220);
-    image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, 120).catch(() => null);
+    await delay(REFERENCE_SEARCH_SETTLE_MS);
+    image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
     if (!image) {
       setInputValue(search, "");
-      await delay(220);
-      image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, 120).catch(() => null);
+      await delay(REFERENCE_SEARCH_SETTLE_MS);
+      image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
     }
   }
   if (!image) throw new Error(`저장된 참조 이미지를 찾지 못했습니다: ${name}`);
@@ -771,7 +775,7 @@ async function attachReference(name) {
     previousAttachmentCount,
     nextAttachmentCount: getPromptAttachmentImageCount()
   });
-  await delay(120);
+  await delay(60);
 }
 
 function findReferenceImage(name, savedRef, refs = {}) {
@@ -887,10 +891,18 @@ async function selectReferenceTarget(target, name, savedRef, previousAttachmentC
   const candidates = getReferenceSelectionCandidates(target);
   for (const candidate of candidates) {
     clickElement(candidate);
-    const attached = await waitFor(() => isReferenceAttached(previousAttachmentCount), 2500, 150).catch(() => false);
+    const attached = await waitFor(
+      () => isReferenceAttached(previousAttachmentCount),
+      REFERENCE_ATTACH_TIMEOUT_MS,
+      REFERENCE_ATTACH_INTERVAL_MS
+    ).catch(() => false);
     if (attached) return;
     doubleClickElement(candidate);
-    const attachedByDoubleClick = await waitFor(() => isReferenceAttached(previousAttachmentCount), 2500, 150).catch(() => false);
+    const attachedByDoubleClick = await waitFor(
+      () => isReferenceAttached(previousAttachmentCount),
+      REFERENCE_ATTACH_TIMEOUT_MS,
+      REFERENCE_ATTACH_INTERVAL_MS
+    ).catch(() => false);
     if (attachedByDoubleClick) return;
     if (isMediaEditView()) {
       await returnToEditor();
@@ -899,7 +911,11 @@ async function selectReferenceTarget(target, name, savedRef, previousAttachmentC
   }
 
   pressEnterInAssetPicker();
-  const attachedByEnter = await waitFor(() => isReferenceAttached(previousAttachmentCount), 2500, 150).catch(() => false);
+  const attachedByEnter = await waitFor(
+    () => isReferenceAttached(previousAttachmentCount),
+    REFERENCE_ATTACH_TIMEOUT_MS,
+    REFERENCE_ATTACH_INTERVAL_MS
+  ).catch(() => false);
   if (attachedByEnter) return;
 
   throw new Error(`참조 이미지 첨부 실패: ${name}. ${describeReferencePickerState(candidates, previousAttachmentCount)}`);

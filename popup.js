@@ -249,7 +249,7 @@ function buildOverviewSummary() {
     createEl("h3", "", "다음 작업"),
     buildMetricRow("모드", getParseModeLabel(), getParseModeDetail()),
     buildMetricRow("캐릭터", nextCharacter ? nextCharacter.id : "완료", `${Math.min(characterIndex, parsed.characters.length)} / ${parsed.characters.length} 완료`),
-    buildMetricRow("장면", nextScene ? String(nextScene.index).padStart(3, "0") : "완료", `${Math.min(sceneIndex, parsed.scenes.length)} / ${parsed.scenes.length} 완료`),
+    buildMetricRow("장면", nextScene ? String(nextScene.index).padStart(3, "0") : "완료", `${getSavedSceneCount()} / ${parsed.scenes.length} 저장`),
     buildMetricRow("모델", modelEl.value, `x${getEffectiveSceneCount()}, ${aspectRatioEl.value}`),
     createEl("div", "summary-last", `마지막 저장: ${last}`)
   );
@@ -346,7 +346,7 @@ function buildSceneSummary() {
 
   for (const [index, scene] of parsed.scenes.entries()) {
     const outputs = byScene.get(scene.index) || [];
-    const status = getProgressStatus(index, sceneIndex);
+    const status = getSceneProgressStatus(index, sceneIndex, outputs.length);
     const refs = scene.references.length ? scene.references.join(", ") : "참조 없음";
     const filenames = outputs.map((output) => output.filename).join(", ");
     const detail = `저장 ${outputs.length}개 / ${refs}${filenames ? ` / ${filenames}` : ""}`;
@@ -387,6 +387,12 @@ function getProgressStatus(index, currentIndex) {
   if (index < currentIndex) return { label: "완료", className: "is-done" };
   if (index === currentIndex) return { label: "다음", className: "is-next" };
   return { label: "대기", className: "is-todo" };
+}
+
+function getSceneProgressStatus(index, currentIndex, savedCount) {
+  if (index <= currentIndex) return getProgressStatus(index, currentIndex);
+  if (savedCount > 0) return { label: "\uc800\uc7a5\ub428", className: "is-done" };
+  return getProgressStatus(index, currentIndex);
 }
 
 function createEl(tag, className = "", text = "") {
@@ -487,12 +493,27 @@ function clampEditorIndex(index, length) {
   return Math.min(Math.max(index, 0), length - 1);
 }
 
+function getSceneOutputCount(sceneNumber) {
+  return sceneOutputs.filter((output) => output.sceneIndex === sceneNumber).length;
+}
+
+function getSavedSceneCount() {
+  return new Set(sceneOutputs.map((output) => output.sceneIndex)).size;
+}
+
 function getEditorLabel(item, index) {
   if (editorKind === "characters") {
     const marker = index < characterIndex ? "완료" : index === characterIndex ? "다음" : "대기";
     return `${item.id} [${marker}]`;
   }
-  const marker = index < sceneIndex ? "완료" : index === sceneIndex ? "다음" : "대기";
+  const saved = getSceneOutputCount(item.index);
+  const marker = index < sceneIndex
+    ? "완료"
+    : index === sceneIndex
+      ? "다음"
+      : saved > 0
+        ? "\uc800\uc7a5\ub428"
+        : "대기";
   return `${String(item.index).padStart(3, "0")} / ${item.total} [${marker}]`;
 }
 
@@ -504,7 +525,7 @@ function getEditorMeta(item) {
       : "아직 저장된 캐릭터 참조가 없습니다.";
   }
   const refs = item.references?.length ? item.references.join(", ") : "참조 없음";
-  const saved = sceneOutputs.filter((output) => output.sceneIndex === item.index).length;
+  const saved = getSceneOutputCount(item.index);
   return `참조 캐릭터: ${refs}. 저장된 장면 이미지: ${saved}.`;
 }
 
