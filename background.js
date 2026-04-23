@@ -28,6 +28,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+  if (!shouldHandleDownload(downloadItem)) {
+    suggest();
+    return;
+  }
+
   const nextName = pendingDownloadNames.shift();
   if (!nextName) return;
 
@@ -37,6 +42,21 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
     conflictAction: "uniquify"
   });
 });
+
+function shouldHandleDownload(downloadItem = {}) {
+  if (downloadItem.byExtensionId && downloadItem.byExtensionId !== chrome.runtime.id) {
+    return false;
+  }
+
+  if (downloadItem.byExtensionId === chrome.runtime.id) {
+    return true;
+  }
+
+  const values = [downloadItem.url, downloadItem.finalUrl, downloadItem.referrer]
+    .filter(Boolean)
+    .join(" ");
+  return /labs\.google|googleusercontent\.com|googleapis\.com/i.test(values);
+}
 
 function getExtension(filename) {
   const match = filename.match(/\.[a-z0-9]{2,5}$/i);

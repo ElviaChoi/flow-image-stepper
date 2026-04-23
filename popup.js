@@ -4,17 +4,20 @@ const logEl = document.getElementById("log");
 const modelEl = document.getElementById("model");
 const sceneCountEl = document.getElementById("sceneCount");
 const aspectRatioEl = document.getElementById("aspectRatio");
+const debugEl = document.getElementById("debug");
 const promptEditorEl = document.getElementById("promptEditor");
 const settingsNoteEl = document.getElementById("settingsNote");
 
 const PRO_MODEL = "Nano Banana Pro";
 const PRO_MAX_SCENE_COUNT = 2;
+const CHARACTER_LIBRARY_KEY = "characterLibrary";
 
 let parsed = null;
 let characterIndex = 0;
 let sceneIndex = 0;
 let sceneOutputs = [];
 let characterRefs = {};
+let characterLibrary = {};
 let checkpoint = null;
 let editorKind = "characters";
 let editorIndex = 0;
@@ -22,14 +25,17 @@ let editorIndex = 0;
 init();
 
 function init() {
-  chrome.storage.local.get(["source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs", "characterRefs", "checkpoint", "model", "sceneCount", "aspectRatio"], (data) => {
+  chrome.storage.local.get(["source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs", "characterRefs", CHARACTER_LIBRARY_KEY, "checkpoint", "model", "sceneCount", "aspectRatio", "debug"], (data) => {
     if (data.source) sourceEl.value = data.source;
     if (data.model) modelEl.value = data.model;
     if (data.sceneCount) sceneCountEl.value = String(data.sceneCount);
     if (data.aspectRatio) aspectRatioEl.value = data.aspectRatio;
+    if (debugEl) debugEl.checked = Boolean(data.debug);
     enforceModelLimits({ persist: false });
     sceneOutputs = data.sceneOutputs || [];
     characterRefs = data.characterRefs || {};
+    characterLibrary = data[CHARACTER_LIBRARY_KEY] || {};
+    mergeRefsIntoCharacterLibrary(characterRefs);
     checkpoint = data.checkpoint || null;
     if (data.parsed) {
       parsed = data.parsed;
@@ -42,6 +48,7 @@ function init() {
   });
 
   document.getElementById("parse").addEventListener("click", parseInput);
+  document.getElementById("restoreRefs").addEventListener("click", restoreCharacterReferencesFromLibrary);
   document.getElementById("runCharacters").addEventListener("click", () => runStep("runCharacters"));
   document.getElementById("runScenes").addEventListener("click", () => runStep("runScenes"));
   document.getElementById("recoverScene").addEventListener("click", () => runRecoverScene());
@@ -51,28 +58,120 @@ function init() {
   modelEl.addEventListener("change", saveSettings);
   sceneCountEl.addEventListener("change", saveSettings);
   aspectRatioEl.addEventListener("change", saveSettings);
+  if (debugEl) debugEl.addEventListener("change", saveSettings);
   updateSettingsNote();
 }
 
-function parseInput() {
+async function parseInput() {
   parsed = FlowPromptParser.parse(sourceEl.value);
-  characterIndex = 0;
   sceneIndex = 0;
   sceneOutputs = [];
-  characterRefs = {};
+  characterRefs = await getRestoredCharacterRefs(parsed);
+  characterIndex = getNextCharacterIndex(parsed, characterRefs);
   checkpoint = null;
   chrome.storage.local.set({
     source: sourceEl.value,
     parsed,
     characterIndex,
     sceneIndex,
-    characterRefs: {},
+    characterRefs,
     sceneOutputs: [],
     checkpoint: null,
     ...getCurrentSettings()
   });
   renderSummary();
   setLog("캐릭터/장면 목록을 만들었습니다.");
+}
+
+function getReferencedCharacterIds(nextParsed) {
+  const ids = new Set();
+  for (const character of nextParsed?.characters || []) {
+    ids.add(character.id);
+  }
+  for (const scene of nextParsed?.scenes || []) {
+    for (const id of scene.references || []) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function loadCharacterLibrary() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [CHARACTER_LIBRARY_KEY]: {} }, (result) => {
+      characterLibrary = result[CHARACTER_LIBRARY_KEY] || {};
+      resolve(characterLibrary);
+    });
+  });
+}
+
+function mergeRefsIntoCharacterLibrary(refs = {}) {
+  const entries = Object.entries(refs).filter(([, ref]) => ref);
+  if (!entries.length) return Promise.resolve(characterLibrary);
+
+  let changed = false;
+  const nextLibrary = { ...characterLibrary };
+  for (const [id, ref] of entries) {
+    if (!nextLibrary[id] || nextLibrary[id].savedAt !== ref.savedAt) {
+      nextLibrary[id] = ref;
+      changed = true;
+    }
+  }
+  if (!changed) return Promise.resolve(characterLibrary);
+
+  characterLibrary = nextLibrary;
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [CHARACTER_LIBRARY_KEY]: characterLibrary }, () => resolve(characterLibrary));
+  });
+}
+
+async function getRestoredCharacterRefs(nextParsed) {
+  const library = await loadCharacterLibrary();
+  const ids = getReferencedCharacterIds(nextParsed);
+  const restored = {};
+  for (const id of ids) {
+    if (library[id]) {
+      restored[id] = library[id];
+    }
+  }
+  return restored;
+}
+
+async function restoreCharacterReferencesFromLibrary() {
+  if (!parsed) {
+    await parseInput();
+    return;
+  }
+
+  const restored = await getRestoredCharacterRefs(parsed);
+  const availableIds = Object.keys(characterLibrary || {}).sort();
+  const currentIds = [...getReferencedCharacterIds(parsed)];
+  const matchedIds = Object.keys(restored).sort();
+  const missingIds = currentIds.filter((id) => !restored[id]).sort();
+  characterRefs = {
+    ...characterRefs,
+    ...restored
+  };
+  characterIndex = getNextCharacterIndex(parsed, characterRefs);
+  chrome.storage.local.set({ characterRefs, characterIndex }, () => {
+    renderSummary();
+    const count = Object.keys(restored).length;
+    setLog(count
+      ? `Restored ${count} saved character reference(s): ${matchedIds.join(", ")}.`
+      : "No saved character references matched the current list.");
+    if (missingIds.length) {
+      setLog(`Missing for current prompt: ${missingIds.join(", ")}.`);
+    }
+    if (availableIds.length) {
+      setLog(`Saved library: ${availableIds.join(", ")}.`);
+    }
+  });
+}
+
+function getNextCharacterIndex(nextParsed, refs) {
+  const characters = nextParsed?.characters || [];
+  const nextIndex = characters.findIndex((character) => !refs[character.id]);
+  return nextIndex === -1 ? characters.length : nextIndex;
 }
 
 function renderSummary() {
@@ -82,6 +181,7 @@ function renderSummary() {
   summaryEl.innerHTML = "";
   summaryEl.append(
     buildOverviewSummary(),
+    buildLibrarySummary(),
     buildCharacterSummary(),
     buildSceneSummary()
   );
@@ -122,6 +222,35 @@ function buildCharacterSummary() {
       title: character.id,
       detail: ref?.mediaName || savedText,
       status
+    }));
+  }
+  return card;
+}
+
+function buildLibrarySummary() {
+  const card = createEl("div", "summary-card");
+  const libraryEntries = Object.entries(characterLibrary || {})
+    .filter(([, ref]) => ref)
+    .sort(([a], [b]) => a.localeCompare(b));
+  card.append(createEl("h3", "", "저장된 캐릭터 참조"));
+
+  if (!libraryEntries.length) {
+    card.append(createEl("div", "summary-empty", "아직 저장된 캐릭터 참조가 없습니다."));
+    return card;
+  }
+
+  const currentIds = getReferencedCharacterIds(parsed);
+  for (const [id, ref] of libraryEntries) {
+    const isCurrent = currentIds.has(id);
+    const isLoaded = Boolean(characterRefs[id]);
+    card.append(buildStatusRow({
+      title: id,
+      detail: ref.mediaName || ref.href || "saved",
+      status: isLoaded
+        ? { label: "불러옴", className: "is-done" }
+        : isCurrent
+          ? { label: "매칭", className: "is-next" }
+          : { label: "보관", className: "is-todo" }
     }));
   }
   return card;
@@ -402,7 +531,7 @@ function renderSceneOutputStatus() {
 }
 
 async function runStep(action) {
-  if (!parsed) parseInput();
+  if (!parsed) await parseInput();
   const selected = selectNextItem(action);
   if (!selected) return;
   if (action === "runScenes" && !(await ensureSceneReferencesReady(selected.item))) {
@@ -436,7 +565,7 @@ async function runStep(action) {
 }
 
 async function runRecoverScene() {
-  if (!parsed) parseInput();
+  if (!parsed) await parseInput();
   const selected = selectNextItem("runScenes");
   if (!selected) return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -450,7 +579,8 @@ async function runRecoverScene() {
     parsed: selected.parsed,
     settings: {
       model: modelEl.value,
-      sceneCount: getEffectiveSceneCount()
+      sceneCount: getEffectiveSceneCount(),
+      debug: Boolean(debugEl?.checked)
     }
   };
 
@@ -467,8 +597,8 @@ async function runRecoverScene() {
   });
 }
 
-function backOneScene() {
-  if (!parsed) parseInput();
+async function backOneScene() {
+  if (!parsed) await parseInput();
   if (!parsed?.scenes?.length) return;
   const nextIndex = Math.max(0, sceneIndex - 1);
   const scene = parsed.scenes[nextIndex];
@@ -553,6 +683,15 @@ function getMissingSceneReferences(scene) {
 
 async function ensureSceneReferencesReady(scene) {
   await refreshSavedState({ render: false });
+  if (scene?.references?.some((id) => !characterRefs[id])) {
+    const restored = await getRestoredCharacterRefs(parsed);
+    characterRefs = {
+      ...characterRefs,
+      ...restored
+    };
+    characterIndex = getNextCharacterIndex(parsed, characterRefs);
+    await chrome.storage.local.set({ characterRefs, characterIndex });
+  }
   const missing = getMissingSceneReferences(scene);
   if (!missing.length) return true;
   renderSummary();
@@ -605,9 +744,10 @@ function buildManualCheckpoint(label) {
 
 function refreshSavedState(options = { render: true }) {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ sceneOutputs: [], characterRefs: {} }, (data) => {
+    chrome.storage.local.get({ sceneOutputs: [], characterRefs: {}, [CHARACTER_LIBRARY_KEY]: {} }, (data) => {
       sceneOutputs = data.sceneOutputs || [];
       characterRefs = data.characterRefs || {};
+      characterLibrary = data[CHARACTER_LIBRARY_KEY] || {};
       if (options.render) renderSummary();
       resolve();
     });
@@ -651,7 +791,8 @@ function getCurrentSettings() {
   return {
     model: modelEl.value,
     sceneCount: getEffectiveSceneCount(),
-    aspectRatio: aspectRatioEl.value
+    aspectRatio: aspectRatioEl.value,
+    debug: Boolean(debugEl?.checked)
   };
 }
 
@@ -699,7 +840,8 @@ function updateSettingsNote() {
   settingsNoteEl.classList.remove("is-visible");
 }
 
-function clearSource() {
+async function clearSource() {
+  await mergeRefsIntoCharacterLibrary(characterRefs);
   parsed = null;
   characterIndex = 0;
   sceneIndex = 0;

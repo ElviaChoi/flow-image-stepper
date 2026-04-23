@@ -13,8 +13,56 @@ const K = {
 
 const FLOW_STEPPER = {
   running: false,
-  delayMs: 350
+  delayMs: 350,
+  debug: false
 };
+
+function debugLog(message, data) {
+  if (!FLOW_STEPPER.debug) return;
+  if (typeof data === "undefined") {
+    console.info("[Flow Stepper][debug]", message);
+    return;
+  }
+  console.info("[Flow Stepper][debug]", message, data);
+}
+
+function safeText(value, max = 400) {
+  const text = String(value || "");
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+function dumpSettingsSnapshot() {
+  const settingsButton = findSettingsButton();
+  return {
+    href: location.href,
+    settingsButtonText: safeText(settingsButton?.textContent || ""),
+    selectedSettingsText: safeText(getSelectedSettingsText?.() || "", 800)
+  };
+}
+
+function dumpSettingTabs(limit = 40) {
+  const surfaces = getSettingsSurfaces?.() || [];
+  const tabs = surfaces.flatMap((surface) => [...surface.querySelectorAll('button[role="tab"]')]);
+  return tabs.slice(0, limit).map((tab) => ({
+    text: safeText(tab.textContent || "", 120),
+    id: safeText(tab.id || "", 120),
+    ariaSelected: tab.getAttribute("aria-selected"),
+    dataState: tab.getAttribute("data-state"),
+    controls: safeText(tab.getAttribute("aria-controls") || "", 120)
+  }));
+}
+
+function dumpEditItemsSummary(limit = 10) {
+  const items = getEditItems?.() || [];
+  return {
+    count: items.length,
+    head: items.slice(0, limit).map((item) => ({
+      href: item.href,
+      tileId: item.tileId,
+      mediaName: getMediaNameFromUrl(item.src || "")
+    }))
+  };
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message?.type?.startsWith("run")) return;
@@ -24,6 +72,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   FLOW_STEPPER.running = true;
+  FLOW_STEPPER.debug = Boolean(message?.payload?.settings?.debug);
   const task = getTask(message);
 
   task
@@ -34,6 +83,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
     .finally(() => {
       FLOW_STEPPER.running = false;
+      FLOW_STEPPER.debug = false;
     });
 
   return true;
@@ -62,7 +112,7 @@ async function runCharacters(payload) {
     const before = snapshotEditLinks();
     await pastePrompt(character.prompt);
     await clickGenerate();
-    const newItems = await waitForNewMedia(before, 1, 240000);
+    const newItems = await waitForProjectNewMedia(before, 1, 240000);
     await saveCharacterReference(character.id, newItems[0], payload.settings.model);
   }
 }
@@ -72,6 +122,15 @@ async function runScenes(payload) {
   for (const scene of payload.parsed.scenes) {
     const baseName = buildSceneBaseName(scene);
     console.info("[Flow Stepper] scene", baseName);
+    debugLog("runScenes:start", {
+      sceneIndex: scene.index,
+      sceneTotal: scene.total,
+      expectedCount: payload.settings.sceneCount,
+      model: payload.settings.model,
+      aspectRatio: payload.settings.aspectRatio,
+      references: scene.references,
+      snapshot: dumpSettingsSnapshot()
+    });
     await clearPromptAndReferences();
 
     for (const ref of scene.references) {
@@ -79,6 +138,10 @@ async function runScenes(payload) {
     }
 
     const before = snapshotEditLinks();
+    debugLog("runScenes:beforeGenerate", {
+      beforeCount: before.size,
+      snapshot: dumpSettingsSnapshot()
+    });
     await pastePrompt(scene.prompt);
     await setGenerationSettings({
       mode: K.image,
@@ -86,8 +149,21 @@ async function runScenes(payload) {
       aspectRatio: payload.settings.aspectRatio,
       count: payload.settings.sceneCount
     });
+    debugLog("runScenes:afterSettings", {
+      snapshot: dumpSettingsSnapshot(),
+      tabs: dumpSettingTabs(30)
+    });
     await clickGenerate();
-    const newItems = await waitForNewMedia(before, payload.settings.sceneCount, 300000);
+    debugLog("runScenes:clickedGenerate", {
+      expectedCount: payload.settings.sceneCount,
+      editItems: dumpEditItemsSummary(8)
+    });
+    const newItems = await waitForProjectNewMedia(before, payload.settings.sceneCount, 300000);
+    debugLog("runScenes:gotNewMedia", {
+      expectedCount: payload.settings.sceneCount,
+      got: newItems.length,
+      hrefs: newItems.map((item) => item.href)
+    });
     await saveSceneOutputs(scene, newItems, baseName, payload.settings.model);
   }
 }
@@ -106,14 +182,14 @@ async function runRecoverScene(payload) {
 }
 
 async function ensureProjectEditor() {
-  if (location.href.includes("/edit/")) {
+  if (isMediaEditView()) {
     await returnToEditor();
   }
-  if (findPromptEditor()) return;
+  if (!isMediaEditView() && findPromptEditor()) return;
   const newProject = findButton((button) => button.textContent.includes(K.newProject));
   if (newProject) {
     newProject.click();
-    await waitFor(findPromptEditor, 30000);
+    await waitFor(() => !isMediaEditView() && findPromptEditor(), 30000);
     return;
   }
   throw new Error("프롬프트 입력창 또는 새 프로젝트 버튼을 찾지 못했습니다.");
@@ -143,15 +219,27 @@ async function setGenerationSettings({ mode, model, aspectRatio, count }) {
   }
   clickSettingText(aspectRatio);
   await delay(80);
-  clickSettingText(`x${count}`);
+  const countWasSelected = clickCountSetting(count);
   console.info("[Flow Stepper] clicked settings", {
     selected: getSelectedSettingsText(),
     trigger: settingsButton.textContent
   });
-  await waitFor(() => isCurrentSetting(settingsButton, model, aspectRatio, count) ||
-    isOpenSettingSelected(model, aspectRatio, count), 8000, 150);
-  document.body.click();
+  await waitFor(() => isCurrentSetting(settingsButton, model, aspectRatio, count, { requireCount: countWasSelected }) ||
+    isOpenSettingSelected(model, aspectRatio, count, { requireCount: countWasSelected }), 8000, 150);
+  closeOpenMenus();
   await delay(120);
+}
+
+function closeOpenMenus() {
+  document.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Escape",
+    code: "Escape",
+    keyCode: 27,
+    which: 27,
+    bubbles: true,
+    cancelable: true
+  }));
+  document.body.click();
 }
 
 async function waitForSettingsPanel(settingsButton, timeoutMs) {
@@ -167,7 +255,7 @@ async function waitForSettingsPanel(settingsButton, timeoutMs) {
   }, timeoutMs);
 }
 
-function isCurrentSetting(button, model, aspectRatio, count) {
+function isCurrentSetting(button, model, aspectRatio, count, options = { requireCount: true }) {
   const text = normalize(button.textContent);
   const aspectMap = {
     "16:9": "crop_16_9",
@@ -176,16 +264,16 @@ function isCurrentSetting(button, model, aspectRatio, count) {
     "3:4": "crop_portrait",
     "9:16": "crop_9_16"
   };
-  const hasCount = text.includes(`x${count}`);
+  const hasCount = !options.requireCount || text.includes(`x${count}`) || text.includes(String(count));
   const hasAspect = text.includes(normalize(aspectRatio)) || text.includes(aspectMap[aspectRatio]);
   const hasModel = !model || text.includes(normalize(model));
   return hasModel && hasCount && hasAspect;
 }
 
-function isOpenSettingSelected(model, aspectRatio, count) {
+function isOpenSettingSelected(model, aspectRatio, count, options = { requireCount: true }) {
   const selectedText = normalize(getSelectedSettingsText());
   const hasModel = !model || selectedText.includes(normalize(model));
-  const hasCount = selectedText.includes(`x${count}`);
+  const hasCount = !options.requireCount || selectedText.includes(`x${count}`) || selectedText.includes(String(count));
   const hasAspect = selectedText.includes(normalize(aspectRatio));
   return hasModel && hasCount && hasAspect;
 }
@@ -200,6 +288,17 @@ function getSelectedSettingsText() {
 }
 
 function findSettingsButton() {
+  const promptBar = findPromptBar();
+  if (promptBar) {
+    const promptBarSettings = [...promptBar.querySelectorAll("button")]
+      .find((button) => {
+        const text = button.textContent || "";
+        return button.getAttribute("aria-haspopup") === "menu" &&
+          (text.includes("Nano") || text.includes("Banana") || text.includes("Imagen") || text.includes("crop_") || /x[1-4]/.test(text));
+      });
+    if (promptBarSettings) return promptBarSettings;
+  }
+
   const buttons = [...document.querySelectorAll("button")];
   return findPromptBarButtonBeforeGenerate() || buttons.find((button) => {
     const text = button.textContent || "";
@@ -235,6 +334,22 @@ function findPromptBarButtonBeforeGenerate() {
     if (settings) return settings;
   }
 
+  return null;
+}
+
+function findPromptBar() {
+  const editor = findPromptEditor();
+  if (!editor) return null;
+  let node = editor.parentElement;
+  while (node) {
+    const text = node.textContent || "";
+    const hasAdd = text.includes("add_2");
+    const hasGenerate = text.includes("arrow_forward") && text.includes(K.make);
+    if (hasAdd && hasGenerate && node.querySelectorAll("button").length >= 2) {
+      return node;
+    }
+    node = node.parentElement;
+  }
   return null;
 }
 
@@ -280,6 +395,23 @@ function clickSettingText(text, options = { optional: false }) {
     controls: candidate.getAttribute("aria-controls")
   });
   clickElement(candidate);
+  return candidate;
+}
+
+function clickCountSetting(count) {
+  const candidate = findSettingTab(`x${count}`) || findVisibleCountCandidate(count);
+  if (!candidate) {
+    console.warn("[Flow Stepper] count setting not found; continuing with current Flow count", count);
+    return false;
+  }
+  console.info("[Flow Stepper] click count setting", count, {
+    text: candidate.textContent,
+    id: candidate.id,
+    controls: candidate.getAttribute("aria-controls"),
+    label: candidate.getAttribute("aria-label")
+  });
+  clickElement(candidate);
+  return true;
 }
 
 function findSettingTab(text) {
@@ -291,8 +423,11 @@ function findSettingTab(text) {
     const number = text.slice(1);
     return tabs.find((tab) =>
       normalize(tab.textContent) === normalizedText ||
+      normalize(tab.textContent) === number ||
       tab.id.endsWith(`-trigger-${number}`) ||
-      tab.getAttribute("aria-controls")?.endsWith(`-content-${number}`)
+      tab.getAttribute("aria-controls")?.endsWith(`-content-${number}`) ||
+      hasCountToken(tab.id, number) ||
+      hasCountToken(tab.getAttribute("aria-controls"), number)
     ) || null;
   }
 
@@ -345,6 +480,54 @@ function findVisibleSettingCandidate(text) {
       if (aExact !== bExact) return aExact - bExact;
       return (ar.width * ar.height) - (br.width * br.height);
     })[0] || null;
+}
+
+function findVisibleCountCandidate(count) {
+  const countText = String(count);
+  const surfaces = getSettingsSurfaces();
+  const elements = surfaces.flatMap((surface) =>
+    [surface, ...surface.querySelectorAll('[role="tab"], [role="menuitem"], [role="option"], button, div, span')]
+  );
+
+  return elements
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      const text = normalize(element.textContent);
+      const label = normalize([
+        element.getAttribute("aria-label"),
+        element.getAttribute("title"),
+        element.id,
+        element.getAttribute("aria-controls")
+      ].filter(Boolean).join(" "));
+      return text === `x${countText}` ||
+        text === countText ||
+        hasCountToken(label, countText);
+    })
+    .sort((a, b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      const aText = normalize(a.textContent);
+      const bText = normalize(b.textContent);
+      const aExact = aText === `x${countText}` || aText === countText ? 0 : 1;
+      const bExact = bText === `x${countText}` || bText === countText ? 0 : 1;
+      if (aExact !== bExact) return aExact - bExact;
+      return (ar.width * ar.height) - (br.width * br.height);
+    })[0] || null;
+}
+
+function hasCountToken(value, countText) {
+  const text = normalize(value).toUpperCase();
+  if (!text) return false;
+  return text.includes(`X${countText}`) ||
+    text.includes(`COUNT${countText}`) ||
+    text.includes(`COUNT_${countText}`) ||
+    text.includes(`IMAGECOUNT${countText}`) ||
+    text.includes(`IMAGE_COUNT_${countText}`) ||
+    text.includes(`NUMIMAGES${countText}`) ||
+    text.includes(`NUM_IMAGES_${countText}`) ||
+    text.endsWith(`-${countText}`) ||
+    text.endsWith(`_${countText}`);
 }
 
 function getSettingsSurfaces() {
@@ -448,6 +631,16 @@ function clickElement(element) {
   element.click?.();
 }
 
+function doubleClickElement(element) {
+  clickElement(element);
+  element.dispatchEvent(new MouseEvent("dblclick", {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window
+  }));
+}
+
 function editorTextContains(editor, prompt) {
   const probe = prompt.replace(/\s+/g, " ").trim().slice(0, 40);
   const text = (editor.innerText || editor.textContent || "").replace(/\s+/g, " ").trim();
@@ -477,8 +670,11 @@ async function clickGenerate() {
 }
 
 function findGenerateButton() {
-  const buttons = [...document.querySelectorAll("button")];
-  const byIcon = buttons.find((button) => button.textContent.includes("arrow_forward"));
+  const promptBar = findPromptBar();
+  const buttons = promptBar ? [...promptBar.querySelectorAll("button")] : [...document.querySelectorAll("button")];
+  const byIcon = buttons.find((button) =>
+    button.textContent.includes("arrow_forward") && button.textContent.includes(K.make)
+  );
   if (byIcon) return byIcon;
 
   const editor = findPromptEditor();
@@ -503,27 +699,65 @@ async function attachReference(name) {
   const refs = await loadCharacterReferences();
   const savedRef = refs[name];
   const previousAttachmentCount = getPromptAttachmentImageCount();
-  const addButton = findButton((button) =>
+  const promptBar = findPromptBar();
+  const addButton = [...(promptBar || document).querySelectorAll("button")].find((button) =>
     button.textContent.includes("add_2") && button.textContent.includes(K.make)
   );
   if (!addButton) throw new Error("참조 이미지 추가 버튼을 찾지 못했습니다.");
+  debugLog("attachReference:openPicker", {
+    name,
+    previousAttachmentCount,
+    savedRef: savedRef ? { id: savedRef.id, mediaName: savedRef.mediaName, href: savedRef.href } : null,
+    snapshot: dumpSettingsSnapshot()
+  });
   addButton.click();
-  await waitFor(() => document.querySelector(`input[placeholder="${K.assetSearch}"]`), 15000);
+  await waitFor(getAssetPickerSearchInput, 15000);
 
-  const search = document.querySelector(`input[placeholder="${K.assetSearch}"]`);
-  if (search && !savedRef) {
-    setInputValue(search, name);
-    await delay(500);
+  const search = getAssetPickerSearchInput();
+  // Fast path: picker가 이미 최신 목록 상태면 바로 찾는다.
+  let image = await waitFor(() => findReferenceImage(name, savedRef, refs), 1500, 120).catch(() => null);
+
+  // Fallback 1: 검색어를 비우고 짧게 다시 시도한다.
+  if (!image && search) {
+    setInputValue(search, "");
+    await delay(220);
+    image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, 120).catch(() => null);
   }
 
-  const image = await waitFor(() => findReferenceImage(name, savedRef), 20000);
+  // Fallback 2: 이름으로 좁혀서 찾는다.
+  if (!image && search) {
+    setInputValue(search, name);
+    await delay(220);
+    image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, 120).catch(() => null);
+    if (!image) {
+      setInputValue(search, "");
+      await delay(220);
+      image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, 120).catch(() => null);
+    }
+  }
+  if (!image) throw new Error(`저장된 참조 이미지를 찾지 못했습니다: ${name}`);
+  debugLog("attachReference:foundImage", {
+    name,
+    alt: image.getAttribute("alt"),
+    src: image.currentSrc || image.src || "",
+    pickerRows: getAssetPickerRows()?.length || 0,
+    images: getAssetPickerListImages().slice(0, 12).map((img) => ({
+      alt: safeText(img.getAttribute("alt") || "", 80),
+      mediaName: getMediaNameFromUrl(img.currentSrc || img.src || "")
+    }))
+  });
   const target = findReferenceClickTarget(image);
   await selectReferenceTarget(target, name, savedRef, previousAttachmentCount);
-  await delay(250);
+  debugLog("attachReference:attached", {
+    name,
+    previousAttachmentCount,
+    nextAttachmentCount: getPromptAttachmentImageCount()
+  });
+  await delay(120);
 }
 
-function findReferenceImage(name, savedRef) {
-  const images = [...document.querySelectorAll("img[alt]")];
+function findReferenceImage(name, savedRef, refs = {}) {
+  const images = getAssetPickerListImages();
   const byName = pickBestReferenceImage(images.filter((img) => img.alt === name));
   if (byName) return byName;
 
@@ -536,7 +770,71 @@ function findReferenceImage(name, savedRef) {
       (savedRef.src && src === savedRef.src) ||
       (savedRef.src && src.includes(savedRef.mediaName || "__no_match__"))
     );
-  })) || null;
+  })) || pickReferenceImageBySavedOrder(name, images, refs) || null;
+}
+
+function getAssetPickerRows() {
+  const search = getAssetPickerSearchInput();
+  if (!search) return [];
+  return [...document.querySelectorAll("[data-index], [data-item-index]")]
+    .filter((row) => {
+      const rect = row.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && row.querySelector("img");
+    })
+    .sort((a, b) => {
+      const ai = Number(a.getAttribute("data-index") || a.getAttribute("data-item-index") || 0);
+      const bi = Number(b.getAttribute("data-index") || b.getAttribute("data-item-index") || 0);
+      if (ai !== bi) return ai - bi;
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      if (Math.abs(ar.top - br.top) > 8) return ar.top - br.top;
+      return ar.left - br.left;
+    });
+}
+
+function getAssetPickerListImages() {
+  return getAssetPickerRows()
+    .map((row) => row.querySelector("img[alt]") || row.querySelector("img"))
+    .filter(Boolean);
+}
+
+function pickReferenceImageBySavedOrder(name, images, refs) {
+  const recentRefs = Object.values(refs || {})
+    .filter((ref) => ref?.id)
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+  const rank = recentRefs.findIndex((ref) => ref.id === name);
+  if (rank < 0) return null;
+
+  const candidates = images
+    .map((img) => ({ img, rect: img.getBoundingClientRect() }))
+    .filter(({ img, rect }) => img.closest("[data-index], [data-item-index]") && rect.width > 0 && rect.height > 0 && rect.width <= 160 && rect.height <= 160)
+    .sort((a, b) => {
+      if (Math.abs(a.rect.top - b.rect.top) > 8) return a.rect.top - b.rect.top;
+      return a.rect.left - b.rect.left;
+    });
+  return candidates[rank]?.img || null;
+}
+
+function getAssetPickerSearchInput() {
+  return document.querySelector(`input[placeholder="${K.assetSearch}"]`);
+}
+
+function getAssetPickerSurface() {
+  const search = getAssetPickerSearchInput();
+  if (!search) return null;
+  let node = search;
+  while (node && node !== document.body) {
+    const text = node.textContent || "";
+    const rect = node.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0 &&
+      (node.getAttribute("role") === "dialog" ||
+        node.matches?.('[data-radix-popper-content-wrapper], [data-state="open"]') ||
+        (node.querySelector?.(`input[placeholder="${K.assetSearch}"]`) && node.querySelectorAll?.("img").length))) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return search.parentElement || null;
 }
 
 function pickBestReferenceImage(images) {
@@ -553,6 +851,9 @@ function pickBestReferenceImage(images) {
 }
 
 function findReferenceClickTarget(image) {
+  const row = image.closest("[data-index], [data-item-index]");
+  if (row) return row;
+
   let node = image;
   for (let depth = 0; node && depth < 6; depth += 1) {
     const rect = node.getBoundingClientRect();
@@ -565,25 +866,114 @@ function findReferenceClickTarget(image) {
 }
 
 async function selectReferenceTarget(target, name, savedRef, previousAttachmentCount) {
-  clickElement(target);
-  await delay(300);
-  if (isReferenceAttached(previousAttachmentCount)) return;
-
-  clickElement(target);
-  await delay(500);
-  if (isReferenceAttached(previousAttachmentCount)) return;
-
-  const preview = findLargestMatchingReferenceImage(name, savedRef);
-  if (preview && preview !== target) {
-    clickElement(preview);
-    await delay(700);
+  const candidates = getReferenceSelectionCandidates(target);
+  for (const candidate of candidates) {
+    clickElement(candidate);
+    const attached = await waitFor(() => isReferenceAttached(previousAttachmentCount), 2500, 150).catch(() => false);
+    if (attached) return;
+    doubleClickElement(candidate);
+    const attachedByDoubleClick = await waitFor(() => isReferenceAttached(previousAttachmentCount), 2500, 150).catch(() => false);
+    if (attachedByDoubleClick) return;
+    if (isMediaEditView()) {
+      await returnToEditor();
+      throw new Error(`참조 이미지가 선택되지 않고 상세 화면으로 열렸습니다: ${name}`);
+    }
   }
 
-  await waitFor(() => isReferenceAttached(previousAttachmentCount), 10000);
+  pressEnterInAssetPicker();
+  const attachedByEnter = await waitFor(() => isReferenceAttached(previousAttachmentCount), 2500, 150).catch(() => false);
+  if (attachedByEnter) return;
+
+  throw new Error(`참조 이미지 첨부 실패: ${name}. ${describeReferencePickerState(candidates, previousAttachmentCount)}`);
+}
+
+function getReferenceSelectionCandidates(target) {
+  const candidates = [];
+  const row = target.closest?.("[data-index], [data-item-index]");
+  if (row) {
+    candidates.push(row);
+    const rowImage = row.querySelector("img");
+    if (rowImage) candidates.push(rowImage);
+  }
+  const card = findReferenceCard(target);
+  const picker = getAssetPickerSurface();
+  if (card) {
+    candidates.push(...[...card.querySelectorAll('button, [role="button"], [tabindex]')]
+      .filter((element) =>
+        (!picker || picker.contains(element)) &&
+        !element.querySelector("img") &&
+        !element.closest('a[href*="/edit/"]')
+      ));
+  }
+  if (!picker || picker.contains(target)) {
+    candidates.push(target);
+  }
+  const preview = findAssetPickerPreviewImage(target);
+  if (preview) {
+    candidates.push(preview);
+  }
+  return [...new Set(candidates)].filter(Boolean);
+}
+
+function describeReferencePickerState(candidates, previousAttachmentCount) {
+  const picker = getAssetPickerSurface();
+  const rows = getAssetPickerRows();
+  const buttons = picker ? [...picker.querySelectorAll("button, [role='button']")].map((button) => normalize(button.textContent)).filter(Boolean) : [];
+  const candidateSummary = candidates.map((element) => {
+    const rect = element.getBoundingClientRect();
+    return `${element.tagName.toLowerCase()}:${normalize(element.textContent).slice(0, 24)}:${Math.round(rect.width)}x${Math.round(rect.height)}`;
+  }).join(" | ");
+  return `pickerRows=${rows.length}, buttons=${buttons.join(",") || "-"}, attachments=${previousAttachmentCount}->${getPromptAttachmentImageCount()}, candidates=${candidateSummary || "-"}`;
+}
+
+function findAssetPickerPreviewImage(selectedTarget) {
+  const picker = getAssetPickerSurface();
+  if (!picker) return null;
+  const selectedSrc = selectedTarget.querySelector?.("img")?.currentSrc ||
+    selectedTarget.querySelector?.("img")?.src ||
+    selectedTarget.currentSrc ||
+    selectedTarget.src ||
+    "";
+  const selectedName = getMediaNameFromUrl(selectedSrc);
+  const images = [...picker.querySelectorAll("img")]
+    .filter((img) => !img.closest("[data-index], [data-item-index]"))
+    .map((img) => ({ img, rect: img.getBoundingClientRect() }))
+    .filter(({ img, rect }) => {
+      if (rect.width <= 160 || rect.height <= 120) return false;
+      const src = img.currentSrc || img.src || "";
+      return !selectedName || getMediaNameFromUrl(src) === selectedName;
+    })
+    .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height));
+  return images[0]?.img || null;
+}
+
+function pressEnterInAssetPicker() {
+  const picker = getAssetPickerSurface();
+  const target = picker || document;
+  target.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Enter",
+    code: "Enter",
+    keyCode: 13,
+    which: 13,
+    bubbles: true,
+    cancelable: true
+  }));
+}
+
+function findReferenceCard(target) {
+  let node = target;
+  for (let depth = 0; node && depth < 8; depth += 1) {
+    const rect = node.getBoundingClientRect();
+    if (node !== target && rect.width <= 520 && rect.height <= 260 && node.querySelector?.("img")) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return target.parentElement || target;
 }
 
 function findLargestMatchingReferenceImage(name, savedRef) {
-  const images = [...document.querySelectorAll("img[alt]")].filter((img) => {
+  const images = getAssetPickerListImages().filter((img) => {
     if (img.alt === name) return true;
     if (!savedRef) return false;
     const src = img.currentSrc || img.src || "";
@@ -595,20 +985,15 @@ function findLargestMatchingReferenceImage(name, savedRef) {
 }
 
 function isReferenceAttached(previousAttachmentCount) {
-  const pickerStillOpen = Boolean(document.querySelector(`input[placeholder="${K.assetSearch}"]`));
-  return !pickerStillOpen || getPromptAttachmentImageCount() > previousAttachmentCount;
+  return !isMediaEditView() && getPromptAttachmentImageCount() > previousAttachmentCount;
 }
 
 function getPromptAttachmentImageCount() {
-  const editor = findPromptEditor();
-  if (!editor) return 0;
-  let node = editor.parentElement;
-  for (let depth = 0; node && depth < 6; depth += 1) {
-    const count = node.querySelectorAll("button img, [draggable='false'][alt]").length;
-    if (count) return count;
-    node = node.parentElement;
-  }
-  return 0;
+  const promptBar = findPromptBar();
+  if (!promptBar) return 0;
+  return [...promptBar.querySelectorAll("img, [draggable='false'][alt]")]
+    .filter((element) => !element.closest('[data-index], [data-item-index]') && !element.closest('[role="dialog"]'))
+    .length;
 }
 
 function snapshotEditLinks() {
@@ -659,11 +1044,37 @@ async function waitForNewMedia(before, expectedCount, timeoutMs) {
   }, timeoutMs);
 }
 
+async function waitForProjectNewMedia(before, expectedCount, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (isMediaEditView()) {
+      await returnToEditor();
+    }
+    const next = getEditItems().filter((item) => !before.has(item.href));
+    if (next.length >= expectedCount) {
+      return next.slice(0, expectedCount);
+    }
+    if (FLOW_STEPPER.debug && (Date.now() - start) % 5000 < 550) {
+      debugLog("waitForProjectNewMedia:poll", {
+        elapsedMs: Date.now() - start,
+        expectedCount,
+        got: next.length,
+        editItems: dumpEditItemsSummary(6)
+      });
+    }
+    await delay(500);
+  }
+  const debugTail = FLOW_STEPPER.debug
+    ? ` (expected=${expectedCount}, snapshot=${JSON.stringify(dumpSettingsSnapshot())}, editItems=${JSON.stringify(dumpEditItemsSummary(6))})`
+    : "";
+  throw new Error(`Flow 화면 응답을 기다리다가 시간이 초과되었습니다.${debugTail}`);
+}
+
 async function saveCharacterReference(id, item, model) {
   const src = item.src || item.tile.querySelector("img")?.currentSrc || item.tile.querySelector("img")?.src || "";
   const mediaName = getMediaNameFromUrl(src);
   const refs = await loadCharacterReferences();
-  refs[id] = {
+  const savedRef = {
     id,
     href: item.href,
     tileId: item.tileId || "",
@@ -672,7 +1083,13 @@ async function saveCharacterReference(id, item, model) {
     model: model || "",
     savedAt: Date.now()
   };
-  await chrome.storage.local.set({ characterRefs: refs });
+  refs[id] = savedRef;
+  const library = await loadCharacterLibrary();
+  library[id] = savedRef;
+  await chrome.storage.local.set({
+    characterRefs: refs,
+    characterLibrary: library
+  });
   console.info("[Flow Stepper] saved reference", id, refs[id]);
 }
 
@@ -758,6 +1175,14 @@ function loadCharacterReferences() {
   });
 }
 
+function loadCharacterLibrary() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ characterLibrary: {} }, (result) => {
+      resolve(result.characterLibrary || {});
+    });
+  });
+}
+
 function getMediaNameFromUrl(src) {
   if (!src) return "";
   try {
@@ -781,18 +1206,31 @@ async function downloadOriginal(name) {
 }
 
 async function returnToEditor() {
-  const back = findButton((button) => button.textContent.includes(K.back));
-  if (back) {
-    clickElement(back);
-    await waitFor(() => !location.href.includes("/edit/"), 20000).catch(() => null);
-    await delay(800);
-    return;
-  }
   const done = findButton((button) => button.textContent.includes(K.done));
   if (done) {
     clickElement(done);
+    await waitFor(() => !isMediaEditView() && findPromptEditor(), 20000).catch(() => null);
     await delay(800);
+    if (!isMediaEditView()) return;
   }
+
+  const back = findButton((button) => button.textContent.includes(K.back));
+  if (back) {
+    clickElement(back);
+    await waitFor(() => !isMediaEditView() && findPromptEditor(), 20000).catch(() => null);
+    await delay(800);
+    if (!isMediaEditView()) return;
+  }
+
+  throw new Error("Flow 편집 화면에서 프로젝트 입력 화면으로 돌아가지 못했습니다. 상단의 완료 버튼을 눌러 다시 시도해주세요.");
+}
+
+function isMediaEditView() {
+  if (location.href.includes("/edit/")) return true;
+  const hasDownload = Boolean(findButton((button) => button.textContent.includes(K.download)));
+  const hasDone = Boolean(findButton((button) => button.textContent.includes(K.done)));
+  const hasEditableText = Boolean(document.querySelector(`input[aria-label="${K.editableText}"]`));
+  return hasDone && (hasDownload || hasEditableText);
 }
 
 function findPromptEditor() {
