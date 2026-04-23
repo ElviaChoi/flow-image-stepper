@@ -202,13 +202,13 @@ async function restoreCharacterReferencesFromLibrary() {
     renderSummary();
     const count = Object.keys(restored).length;
     setLog(count
-      ? `Restored ${count} saved character reference(s): ${matchedIds.join(", ")}.`
+      ? `참조 ${count}개를 불러왔습니다: ${matchedIds.join(", ")}.`
       : "현재 프로젝트에서 매칭되는 저장 참조가 없습니다.");
     if (missingIds.length) {
-      setLog(`Missing for current prompt: ${missingIds.join(", ")}.`);
+      setLog(`현재 프롬프트에서 누락된 참조: ${missingIds.join(", ")}.`);
     }
     if (availableIds.length) {
-      setLog(`Project library: ${availableIds.join(", ")}.`);
+      setLog(`현재 프로젝트 저장 참조: ${availableIds.join(", ")}.`);
     }
   });
 }

@@ -122,10 +122,49 @@ select {
   letter-spacing: 0;
 }
 
+.action-hint {
+  margin: -2px 0 0;
+  color: #95a7b7;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .button-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.advanced-tools {
+  border: 1px solid #2e3a46;
+  border-radius: 8px;
+  background: #101720;
+  padding: 8px 10px 10px;
+}
+
+.advanced-tools summary {
+  cursor: pointer;
+  color: #cfd8d3;
+  font-size: 12px;
+  font-weight: 800;
+  list-style: none;
+}
+
+.advanced-tools summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-tools summary::before {
+  content: "▸ ";
+  color: #89a1b4;
+}
+
+.advanced-tools[open] summary::before {
+  content: "▾ ";
+}
+
+.advanced-tools .button-grid {
+  margin-top: 6px;
 }
 
 button {
