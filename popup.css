@@ -256,7 +256,6 @@ button:disabled {
 }
 
 .button-primary,
-#parse,
 #runScenes {
   border-color: #5c94ff;
   background: linear-gradient(180deg, #4a86ff 0%, #2f6ae2 100%);
@@ -265,13 +264,12 @@ button:disabled {
 }
 
 .button-primary:hover,
-#parse:hover,
 #runScenes:hover {
   background: linear-gradient(180deg, #5a91ff 0%, #3972e5 100%);
   border-color: #89b1ff;
 }
 
-#runCharacters,
+#parse,
 #restoreRefs,
 #recoverScene,
 #backScene,
@@ -282,7 +280,7 @@ button:disabled {
   color: #e6edf6;
 }
 
-#runCharacters:hover,
+#parse:hover,
 #restoreRefs:hover,
 #recoverScene:hover,
 #backScene:hover,
@@ -290,6 +288,18 @@ button:disabled {
 #importLibrary:hover {
   background: linear-gradient(180deg, #253546 0%, #1d2936 100%);
   border-color: #60778f;
+}
+
+#runCharacters {
+  border-color: #4b6f98;
+  background: linear-gradient(180deg, #2b4058 0%, #213348 100%);
+  color: #eef5ff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(75, 111, 152, 0.12);
+}
+
+#runCharacters:hover {
+  background: linear-gradient(180deg, #324a66 0%, #27405a 100%);
+  border-color: #6f95bf;
 }
 
 .button-download,
@@ -309,16 +319,16 @@ button:disabled {
 
 .button-muted,
 #clearSource {
-  border-color: #9f5d6b;
-  background: linear-gradient(180deg, #6d3341 0%, #552833 100%);
-  color: #fff1f4;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: #875565;
+  background: linear-gradient(180deg, #5f2d39 0%, #49232d 100%);
+  color: #ffeef3;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .button-muted:hover,
 #clearSource:hover {
-  background: linear-gradient(180deg, #7b3b4b 0%, #61303b 100%);
-  border-color: #bd7686;
+  background: linear-gradient(180deg, #6d3442 0%, #532a34 100%);
+  border-color: #ab6d7d;
 }
 
 .panel {

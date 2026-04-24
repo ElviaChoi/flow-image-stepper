@@ -95,6 +95,7 @@ function init() {
 }
 
 async function parseInput() {
+  if (!confirmParseReset()) return;
   await refreshCurrentProjectContext();
   parsed = FlowPromptParser.parse(sourceEl.value);
   sceneIndex = 0;
@@ -121,6 +122,19 @@ async function parseInput() {
   } else {
     setLog("캐릭터/장면 목록을 만들었습니다.");
   }
+}
+
+function confirmParseReset() {
+  if (!hasInProgressWorkflow()) return true;
+  return window.confirm("이미 작업 중입니다. 프롬프트 목록을 다시 만들면 진행 상태와 저장된 장면 결과가 초기화됩니다. 계속할까요?");
+}
+
+function hasInProgressWorkflow() {
+  if (sceneOutputs.length) return true;
+  if (characterIndex > 0 || sceneIndex > 0) return true;
+  if (checkpoint) return true;
+  if (!parsed) return false;
+  return parsed.characters.length > 0 || parsed.scenes.length > 0;
 }
 
 function getReferencedCharacterIds(nextParsed) {
