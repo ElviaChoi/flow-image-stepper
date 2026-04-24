@@ -1,4 +1,6 @@
 const pendingDownloadNames = [];
+const pendingDownloadRequests = [];
+const pendingDownloadNamesById = new Map();
 
 chrome.runtime.onInstalled.addListener(() => {
   if (chrome.sidePanel?.setPanelBehavior) {
@@ -33,8 +35,21 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
     return;
   }
 
-  const nextName = pendingDownloadNames.shift();
-  if (!nextName) return;
+  let nextName = pendingDownloadNamesById.get(downloadItem.id);
+  if (nextName) {
+    pendingDownloadNamesById.delete(downloadItem.id);
+    removePendingRequestById(downloadItem.id);
+  } else if (downloadItem.byExtensionId === chrome.runtime.id) {
+    const request = pendingDownloadRequests.shift();
+    nextName = request?.name || "";
+  } else {
+    nextName = pendingDownloadNames.shift();
+  }
+
+  if (!nextName) {
+    suggest();
+    return;
+  }
 
   const extension = getExtension(downloadItem.filename);
   suggest({
@@ -77,15 +92,20 @@ async function downloadSceneOutputs(outputs) {
   if (!validOutputs.length) throw new Error("No downloadable scene image URLs were saved.");
 
   for (const output of validOutputs) {
-    pendingDownloadNames.push(sanitizeFilename(output.filename || "flow-scene"));
+    const request = {
+      id: null,
+      name: sanitizeFilename(output.filename || "flow-scene")
+    };
+    pendingDownloadRequests.push(request);
     await downloadUrl({
-      url: output.src
+      url: output.src,
+      request
     });
   }
   return validOutputs.length;
 }
 
-function downloadUrl({ url }) {
+function downloadUrl({ url, request }) {
   return new Promise((resolve, reject) => {
     chrome.downloads.download({
       url,
@@ -97,7 +117,16 @@ function downloadUrl({ url }) {
         reject(new Error(error.message));
         return;
       }
+      if (typeof downloadId === "number" && request) {
+        request.id = downloadId;
+        pendingDownloadNamesById.set(downloadId, request.name);
+      }
       resolve(downloadId);
     });
   });
+}
+
+function removePendingRequestById(downloadId) {
+  const index = pendingDownloadRequests.findIndex((request) => request.id === downloadId);
+  if (index >= 0) pendingDownloadRequests.splice(index, 1);
 }
