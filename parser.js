@@ -2,8 +2,8 @@
   const CHARACTER_ID_RE = /(?:Character\s*ID\s*:\s*|\uCE90\uB9AD\uD130\s*\uC2DC\uD2B8\s*[\u2014\u2013\-:：]?\s*)([A-Za-z0-9_\-\u3131-\uD79D]+_CS-\d{2})/g;
   const SCENE_HEADER_RE = /(?:Image|이미지)\s*(\d+)\s*\/\s*(\d+)/gi;
   const SCENE_HEADER_SINGLE_RE = /(?:Image|이미지)\s*(\d+)\s*\/\s*(\d+)/i;
-  const CODE_BLOCK_RE = /```(?:[a-zA-Z]*)?\s*([\s\S]*?)```/;
-  const CODE_BLOCK_GLOBAL_RE = /```(?:[a-zA-Z]*)?\s*([\s\S]*?)```/g;
+  const CODE_BLOCK_RE = /```[^\r\n]*(?:\r?\n)?([\s\S]*?)```/;
+  const CODE_BLOCK_GLOBAL_RE = /```[^\r\n]*(?:\r?\n)?([\s\S]*?)```/g;
   const REFERENCE_ID_RE = /[^\s,()]+_CS-\d{2}/g;
 
   function normalizePrompt(text) {

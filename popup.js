@@ -1058,6 +1058,7 @@ function updateSettingsNote() {
 }
 
 async function clearSource() {
+  if (!confirmClearSource()) return;
   await mergeRefsIntoCharacterLibrary(characterRefs);
   parsed = null;
   characterIndex = 0;
@@ -1078,6 +1079,10 @@ async function clearSource() {
   chrome.storage.local.set({ [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject });
   chrome.storage.local.remove(["source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs", "checkpoint"]);
   renderPromptEditor();
+}
+
+function confirmClearSource() {
+  return window.confirm("현재 작업을 초기화합니다. 입력한 프롬프트, 진행 상태, 저장된 장면 결과가 지워집니다. 저장된 캐릭터 참조는 보관함에 남습니다. 계속할까요?");
 }
 
 function getProjectBucket(map, projectId) {
