@@ -21,7 +21,6 @@ const CHARACTER_REFS_BY_PROJECT_KEY = "characterRefsByProject";
 const PROJECT_LAST_USED_KEY = "projectLastUsedAt";
 const PROMPT_EDITOR_EXPANDED_KEY = "promptEditorExpanded";
 const MAX_REFS_PER_PROJECT = 200;
-const STALE_PROJECT_DAYS = 30;
 
 let parsed = null;
 let characterIndex = 0;
@@ -383,12 +382,8 @@ function buildLibrarySummary() {
   const libraryEntries = Object.entries(projectLibrary || {})
     .filter(([, ref]) => ref)
     .sort(([a], [b]) => a.localeCompare(b));
-  const staleProjects = getStaleProjectIds(projectLastUsedAt);
   if (currentProjectId) {
     card.append(createEl("div", "summary-empty", `현재 프로젝트: ${currentProjectId}`));
-  }
-  if (staleProjects.length) {
-    card.append(createEl("div", "summary-empty", `정리 권장 프로젝트 ${staleProjects.length}개 (30일 이상 미사용)`));
   }
 
   if (!libraryEntries.length) {
@@ -1095,14 +1090,6 @@ function trimProjectLibrary(library) {
     .filter(([, ref]) => ref)
     .sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0));
   return Object.fromEntries(entries.slice(0, MAX_REFS_PER_PROJECT));
-}
-
-function getStaleProjectIds(lastUsedMap = {}) {
-  const cutoff = Date.now() - (STALE_PROJECT_DAYS * 24 * 60 * 60 * 1000);
-  return Object.entries(lastUsedMap)
-    .filter(([, savedAt]) => Number(savedAt || 0) > 0 && Number(savedAt) < cutoff)
-    .map(([projectId]) => projectId)
-    .sort();
 }
 
 function extractFlowProjectId(url = "") {

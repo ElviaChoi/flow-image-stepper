@@ -1,7 +1,9 @@
 (function attachParser(global) {
-  const CHARACTER_ID_RE = /Character ID:\s*([^\s`]+_CS-\d{2})/g;
-  const SCENE_HEADER_RE = /Image\s+(\d+)\s*\/\s*(\d+)/g;
+  const CHARACTER_ID_RE = /(?:Character\s*ID\s*:\s*|\uCE90\uB9AD\uD130\s*\uC2DC\uD2B8\s*[\u2014\u2013\-:：]?\s*)([A-Za-z0-9_\-\u3131-\uD79D]+_CS-\d{2})/g;
+  const SCENE_HEADER_RE = /(?:Image|이미지)\s*(\d+)\s*\/\s*(\d+)/gi;
+  const SCENE_HEADER_SINGLE_RE = /(?:Image|이미지)\s*(\d+)\s*\/\s*(\d+)/i;
   const CODE_BLOCK_RE = /```(?:[a-zA-Z]*)?\s*([\s\S]*?)```/;
+  const CODE_BLOCK_GLOBAL_RE = /```(?:[a-zA-Z]*)?\s*([\s\S]*?)```/g;
   const REFERENCE_ID_RE = /[^\s,()]+_CS-\d{2}/g;
 
   function normalizePrompt(text) {
@@ -17,7 +19,7 @@
   }
 
   function firstSceneIndex(source) {
-    const match = /Image\s+\d+\s*\/\s*\d+/.exec(source);
+    const match = /(?:Image|이미지)\s*\d+\s*\/\s*\d+/i.exec(source);
     return match ? match.index : source.length;
   }
 
@@ -43,6 +45,11 @@
     return colon >= 0 ? line.slice(colon + 1).trim() : line;
   }
 
+  function getReferencesFromText(text) {
+    if ((text || "").includes("\uc5c6\uc74c")) return [];
+    return [...new Set((text || "").match(REFERENCE_ID_RE) || [])];
+  }
+
   function parseScenes(source) {
     const matches = [...source.matchAll(SCENE_HEADER_RE)];
     return matches.map((match, index) => {
@@ -51,9 +58,7 @@
       const body = source.slice(start, end);
       const placement = getLineValue(body, "\ubc30\uce58");
       const castLine = getLineValue(body, "\ub4f1\uc7a5\uc778\ubb3c");
-      const references = castLine.includes("\uc5c6\uc74c")
-        ? []
-        : [...new Set(castLine.match(REFERENCE_ID_RE) || [])];
+      const references = getReferencesFromText(castLine);
       const chapter = (placement.match(/Chapter\s+(\d+)/i) || [null, ""])[1];
       return {
         index: Number(match[1]),
@@ -66,6 +71,41 @@
         status: "pending"
       };
     });
+  }
+
+  function getCodeBlocks(source) {
+    return [...source.matchAll(CODE_BLOCK_GLOBAL_RE)].map((match) => ({
+      start: match.index,
+      end: match.index + match[0].length,
+      prompt: normalizePrompt(match[1])
+    }));
+  }
+
+  function parseReferencedScenes(source) {
+    const blocks = getCodeBlocks(source);
+    const scenes = [];
+    for (const [blockIndex, block] of blocks.entries()) {
+      const previousEnd = blockIndex > 0 ? blocks[blockIndex - 1].end : 0;
+      const meta = source.slice(previousEnd, block.start);
+      const placement = getLineValue(meta, "\ubc30\uce58");
+      const castLine = getLineValue(meta, "\ub4f1\uc7a5\uc778\ubb3c");
+      if (!castLine) continue;
+      const references = getReferencesFromText(castLine);
+
+      const header = meta.match(SCENE_HEADER_SINGLE_RE);
+      const chapter = (placement.match(/Chapter\s+(\d+)/i) || [null, ""])[1];
+      scenes.push({
+        index: header ? Number(header[1]) : scenes.length + 1,
+        total: header ? Number(header[2]) : blocks.length,
+        placement,
+        castLine,
+        references,
+        chapter,
+        prompt: block.prompt,
+        status: "pending"
+      });
+    }
+    return scenes;
   }
 
   function parseSimpleScenes(source) {
@@ -90,11 +130,12 @@
     const text = source.replace(/\r\n/g, "\n");
     const characters = parseCharacters(text).filter((item) => item.prompt);
     const scenes = parseScenes(text).filter((item) => item.prompt);
-    if (characters.length || scenes.length) {
+    const referencedScenes = scenes.length ? scenes : parseReferencedScenes(text).filter((item) => item.prompt);
+    if (characters.length || referencedScenes.length) {
       return {
         mode: "structured",
         characters,
-        scenes
+        scenes: referencedScenes
       };
     }
     return {
