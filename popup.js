@@ -1082,7 +1082,16 @@ async function clearSource() {
 }
 
 function confirmClearSource() {
-  return window.confirm("현재 작업을 초기화합니다. 입력한 프롬프트, 진행 상태, 저장된 장면 결과가 지워집니다. 저장된 캐릭터 참조는 보관함에 남습니다. 계속할까요?");
+  if (!hasActiveWorkflow()) return true;
+  return window.confirm("진행 중인 작업을 초기화할까요?\n프롬프트와 진행 상태가 지워집니다.");
+}
+
+function hasActiveWorkflow() {
+  if (!parsed) return false;
+  if (checkpoint) return true;
+  const hasPendingCharacters = characterIndex < (parsed.characters?.length || 0);
+  const hasPendingScenes = sceneIndex < (parsed.scenes?.length || 0);
+  return hasPendingCharacters || hasPendingScenes;
 }
 
 function getProjectBucket(map, projectId) {
