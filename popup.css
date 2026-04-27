@@ -503,6 +503,11 @@ button:disabled {
   color: #bfdbfe;
 }
 
+.status-pill.is-queued {
+  background: #3b2f17;
+  color: #ffd28a;
+}
+
 .status-pill.is-todo {
   background: #28313b;
   color: #cbd5e1;

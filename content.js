@@ -18,6 +18,9 @@ const FLOW_STEPPER = {
 };
 const REFERENCE_SEARCH_SETTLE_MS = 120;
 const REFERENCE_FIND_INTERVAL_MS = 80;
+const REFERENCE_FIND_FAST_TIMEOUT_MS = 500;
+const REFERENCE_FIND_SEARCH_TIMEOUT_MS = 1800;
+const REFERENCE_FIND_RECOVERY_TIMEOUT_MS = 1200;
 const REFERENCE_ATTACH_TIMEOUT_MS = 1400;
 const REFERENCE_ATTACH_INTERVAL_MS = 100;
 const CHARACTER_REFS_BY_PROJECT_KEY = "characterRefsByProject";
@@ -129,6 +132,7 @@ async function runCharacters(payload) {
 async function runScenes(payload) {
   await migrateLegacyCharacterStorage();
   await ensureProjectEditor();
+  const refs = await loadCharacterReferences();
   for (const scene of payload.parsed.scenes) {
     const baseName = buildSceneBaseName(scene);
     console.info("[Flow Stepper] scene", baseName);
@@ -144,7 +148,7 @@ async function runScenes(payload) {
     await clearPromptAndReferences();
 
     for (const ref of scene.references) {
-      await attachReference(ref);
+      await attachReference(ref, refs);
     }
 
     const before = snapshotEditLinks();
@@ -717,8 +721,8 @@ function findGenerateButton() {
   return null;
 }
 
-async function attachReference(name) {
-  const refs = await loadCharacterReferences();
+async function attachReference(name, refsOverride = null) {
+  const refs = refsOverride || await loadCharacterReferences();
   const savedRef = refs[name];
   const previousAttachmentCount = getPromptAttachmentImageCount();
   const promptBar = findPromptBar();
@@ -736,26 +740,24 @@ async function attachReference(name) {
   await waitFor(getAssetPickerSearchInput, 15000);
 
   const search = getAssetPickerSearchInput();
-  // Fast path: picker가 이미 최신 목록 상태면 바로 찾는다.
-  let image = await waitFor(() => findReferenceImage(name, savedRef, refs), 1500, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
+  let image = findReferenceImage(name, savedRef, refs) ||
+    await waitFor(() => findReferenceImage(name, savedRef, refs), REFERENCE_FIND_FAST_TIMEOUT_MS, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
 
-  // Fallback 1: 검색어를 비우고 짧게 다시 시도한다.
   if (!image && search) {
-    setInputValue(search, "");
-    await delay(REFERENCE_SEARCH_SETTLE_MS);
-    image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
+    for (const term of buildReferenceSearchTerms(name, savedRef)) {
+      updateSearchInput(search, term);
+      await delay(REFERENCE_SEARCH_SETTLE_MS);
+      image = findReferenceImage(name, savedRef, refs) ||
+        await waitFor(() => findReferenceImage(name, savedRef, refs), REFERENCE_FIND_SEARCH_TIMEOUT_MS, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
+      if (image) break;
+    }
   }
 
-  // Fallback 2: 이름으로 좁혀서 찾는다.
-  if (!image && search) {
-    setInputValue(search, name);
+  if (!image && search && search.value) {
+    updateSearchInput(search, "");
     await delay(REFERENCE_SEARCH_SETTLE_MS);
-    image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
-    if (!image) {
-      setInputValue(search, "");
-      await delay(REFERENCE_SEARCH_SETTLE_MS);
-      image = await waitFor(() => findReferenceImage(name, savedRef, refs), 5000, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
-    }
+    image = findReferenceImage(name, savedRef, refs) ||
+      await waitFor(() => findReferenceImage(name, savedRef, refs), REFERENCE_FIND_RECOVERY_TIMEOUT_MS, REFERENCE_FIND_INTERVAL_MS).catch(() => null);
   }
   if (!image) throw new Error(`저장된 참조 이미지를 찾지 못했습니다: ${name}`);
   debugLog("attachReference:foundImage", {
@@ -776,6 +778,19 @@ async function attachReference(name) {
     nextAttachmentCount: getPromptAttachmentImageCount()
   });
   await delay(60);
+}
+
+function buildReferenceSearchTerms(name, savedRef) {
+  return [...new Set([
+    name,
+    savedRef?.mediaName || ""
+  ].map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function updateSearchInput(search, value) {
+  if (!search) return;
+  if (search.value === value) return;
+  setInputValue(search, value);
 }
 
 function findReferenceImage(name, savedRef, refs = {}) {
