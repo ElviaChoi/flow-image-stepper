@@ -10,6 +10,12 @@ const K = {
   assetSearch: "\uc560\uc14b \uac80\uc0c9",
   editableText: "\uc218\uc815 \uac00\ub2a5\ud55c \ud14d\uc2a4\ud2b8"
 };
+const FAILURE_MARKERS = [
+  ["\uc2e4\ud328", "Google \uc815\ucc45"],
+  ["\uc2e4\ud328", "\ub2e4\ub978 \ud504\ub86c\ud504\ud2b8"],
+  ["\uc815\ucc45\uc744 \uc704\ubc18"],
+  ["\uc758\uacac\uc744 \ubcf4\ub0b4\uc8fc\uc138\uc694"]
+];
 
 const FLOW_STEPPER = {
   running: false,
@@ -152,8 +158,10 @@ async function runScenes(payload) {
     }
 
     const before = snapshotEditLinks();
+    const knownSavedOutputs = buildSavedOutputIdentitySet(await loadSceneOutputs());
     debugLog("runScenes:beforeGenerate", {
       beforeCount: before.size,
+      knownSavedCount: knownSavedOutputs.size,
       snapshot: dumpSettingsSnapshot()
     });
     await pastePrompt(scene.prompt);
@@ -172,7 +180,7 @@ async function runScenes(payload) {
       expectedCount: payload.settings.sceneCount,
       editItems: dumpEditItemsSummary(8)
     });
-    const newItems = await waitForProjectNewMedia(before, payload.settings.sceneCount, 300000);
+    const newItems = await waitForProjectNewMedia(before, payload.settings.sceneCount, 300000, knownSavedOutputs);
     debugLog("runScenes:gotNewMedia", {
       expectedCount: payload.settings.sceneCount,
       got: newItems.length,
@@ -1049,6 +1057,32 @@ function snapshotEditLinks() {
   return new Set(getEditItems().map((item) => item.href));
 }
 
+function buildSavedOutputIdentitySet(outputs = []) {
+  const identities = new Set();
+  for (const output of outputs) {
+    addIdentity(identities, "href", output.href);
+    addIdentity(identities, "tile", output.tileId);
+    addIdentity(identities, "media", output.mediaName);
+  }
+  return identities;
+}
+
+function addIdentity(set, prefix, value) {
+  if (value) set.add(`${prefix}:${value}`);
+}
+
+function isKnownSavedOutput(item, identities) {
+  if (!identities?.size) return false;
+  const mediaName = getMediaNameFromUrl(item.src || "");
+  return identities.has(`href:${item.href}`) ||
+    identities.has(`tile:${item.tileId}`) ||
+    identities.has(`media:${mediaName}`);
+}
+
+function getMediaSignature(item) {
+  return [item.href, item.tileId, getMediaNameFromUrl(item.src || "")].filter(Boolean).join("|");
+}
+
 function getEditItems() {
   const seen = new Set();
   return [...document.querySelectorAll('a[href*="/edit/"]')]
@@ -1086,28 +1120,77 @@ function getRecentEditItems(count) {
     .map(({ rect, index, ...item }) => item);
 }
 
+function getEditItemsSortedByVisualOrder() {
+  return getEditItems()
+    .map((item, index) => ({
+      ...item,
+      index,
+      rect: item.tile.getBoundingClientRect()
+    }))
+    .filter((item) => item.rect.width > 0 && item.rect.height > 0)
+    .sort((a, b) => {
+      const ay = Math.round(a.rect.top / 20) * 20;
+      const by = Math.round(b.rect.top / 20) * 20;
+      if (ay !== by) return ay - by;
+      if (a.rect.left !== b.rect.left) return a.rect.left - b.rect.left;
+      return a.index - b.index;
+    })
+    .map(({ rect, index, ...item }) => item);
+}
+
 async function waitForNewMedia(before, expectedCount, timeoutMs) {
   return waitFor(() => {
-    const next = getEditItems().filter((item) => !before.has(item.href));
+    const next = getEditItemsSortedByVisualOrder()
+      .filter((item) => !before.has(item.href));
     return next.length >= expectedCount ? next.slice(0, expectedCount) : null;
   }, timeoutMs);
 }
 
-async function waitForProjectNewMedia(before, expectedCount, timeoutMs) {
+async function waitForProjectNewMedia(before, expectedCount, timeoutMs, knownSavedOutputs = new Set()) {
   const start = Date.now();
+  const initialFailureCount = countGenerationFailures();
+  let lastSignature = "";
+  let stablePolls = 0;
+  let stableItems = [];
+
   while (Date.now() - start < timeoutMs) {
     if (isMediaEditView()) {
       await returnToEditor();
     }
-    const next = getEditItems().filter((item) => !before.has(item.href));
-    if (next.length >= expectedCount) {
-      return next.slice(0, expectedCount);
+    const failureMessage = getGenerationFailureMessage(initialFailureCount);
+    if (failureMessage) {
+      throw new Error(failureMessage);
     }
+    const next = getEditItemsSortedByVisualOrder()
+      .filter((item) => !before.has(item.href))
+      .filter((item) => !isKnownSavedOutput(item, knownSavedOutputs));
+
+    if (next.length >= expectedCount) {
+      const candidateItems = next.slice(0, expectedCount);
+      const signature = candidateItems.map(getMediaSignature).join("||");
+      if (signature && signature === lastSignature) {
+        stablePolls += 1;
+      } else {
+        lastSignature = signature;
+        stablePolls = 1;
+        stableItems = candidateItems;
+      }
+      if (stablePolls >= 4) {
+        return stableItems;
+      }
+    } else {
+      lastSignature = "";
+      stablePolls = 0;
+      stableItems = [];
+    }
+
     if (FLOW_STEPPER.debug && (Date.now() - start) % 5000 < 550) {
       debugLog("waitForProjectNewMedia:poll", {
         elapsedMs: Date.now() - start,
         expectedCount,
         got: next.length,
+        stablePolls,
+        knownSavedCount: knownSavedOutputs.size,
         editItems: dumpEditItemsSummary(6)
       });
     }
@@ -1117,6 +1200,33 @@ async function waitForProjectNewMedia(before, expectedCount, timeoutMs) {
     ? ` (expected=${expectedCount}, snapshot=${JSON.stringify(dumpSettingsSnapshot())}, editItems=${JSON.stringify(dumpEditItemsSummary(6))})`
     : "";
   throw new Error(`Flow 화면 응답을 기다리다가 시간이 초과되었습니다.${debugTail}`);
+}
+
+function getGenerationFailureMessage(initialFailureCount = 0) {
+  const currentFailureCount = countGenerationFailures();
+  if (currentFailureCount <= initialFailureCount) return "";
+
+  const normalized = normalize(document.body?.innerText || "").toLowerCase();
+  if (normalized.includes(normalize("Google 정책").toLowerCase())) {
+    return "Flow 생성이 실패했습니다. Google 정책 위반 가능성 메시지가 표시되었습니다. 프롬프트를 수정한 뒤 다시 시도해 주세요.";
+  }
+  return "Flow 생성이 실패했습니다. 화면에 실패 메시지가 표시되었습니다. 프롬프트를 확인한 뒤 다시 시도해 주세요.";
+}
+
+function countGenerationFailures() {
+  const candidates = [...document.querySelectorAll("div, section, article, li")];
+  const matches = candidates.filter((element) => {
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const text = normalize(element.innerText || element.textContent || "").toLowerCase();
+    if (!text || text.length > 400) return false;
+    return FAILURE_MARKERS.some((markerGroup) =>
+      markerGroup.every((marker) => text.includes(normalize(marker).toLowerCase()))
+    );
+  });
+  return matches.filter((element) =>
+    !matches.some((other) => other !== element && other.contains(element))
+  ).length;
 }
 
 async function saveCharacterReference(id, item, model) {
@@ -1155,7 +1265,7 @@ async function saveCharacterReference(id, item, model) {
 
 async function saveSceneOutputs(scene, items, baseName, model) {
   const outputs = await loadSceneOutputs();
-  const existingKeys = new Set(outputs.map((item) => item.key));
+  const preservedOutputs = outputs.filter((output) => output.sceneIndex !== scene.index);
   const additions = items.map((item, index) => {
     const sequence = String(index + 1).padStart(2, "0");
     const filename = `${baseName}_${sequence}`;
@@ -1172,9 +1282,9 @@ async function saveSceneOutputs(scene, items, baseName, model) {
       model: model || "",
       savedAt: Date.now()
     };
-  }).filter((item) => !existingKeys.has(item.key));
+  });
 
-  const nextOutputs = outputs.concat(additions)
+  const nextOutputs = preservedOutputs.concat(additions)
     .sort((a, b) => (a.sceneIndex - b.sceneIndex) || (a.outputIndex - b.outputIndex));
   await chrome.storage.local.set({ sceneOutputs: nextOutputs });
   console.info("[Flow Stepper] saved scene outputs", additions);
@@ -1189,7 +1299,7 @@ function loadSceneOutputs() {
 }
 
 async function runDownloadScenes() {
-  const outputs = await loadSceneOutputs();
+  const outputs = sortSceneOutputsForDownload(await loadSceneOutputs());
   if (!outputs.length) throw new Error("아직 저장된 장면 이미지가 없습니다.");
   await ensureProjectEditor();
 
@@ -1223,7 +1333,8 @@ async function downloadMedia(item, name) {
   try {
     await downloadOriginal(name);
   } catch (error) {
-    console.warn("[Flow Stepper] Download skipped:", error);
+    console.warn("[Flow Stepper] Download failed:", error);
+    throw error;
   }
 }
 
@@ -1288,9 +1399,26 @@ async function downloadOriginal(name) {
   clickElement(download);
   const oneK = await waitFor(() => [...document.querySelectorAll('[role="menuitem"]')]
     .find((item) => item.textContent.includes("1K") && item.textContent.includes(K.originalSize)), 6000);
-  await chrome.runtime.sendMessage({ type: "prepareDownloadName", filename: name });
+  const prepared = await chrome.runtime.sendMessage({ type: "prepareDownloadName", filename: name });
+  if (!prepared?.ok || !prepared.token) throw new Error("다운로드 파일명 준비에 실패했습니다.");
   clickElement(oneK);
-  await delay(1200);
+  const completed = await chrome.runtime.sendMessage({ type: "waitPreparedDownload", token: prepared.token });
+  if (!completed?.ok) throw new Error(completed?.message || "다운로드 완료를 확인하지 못했습니다.");
+}
+
+function sortSceneOutputsForDownload(outputs) {
+  return [...outputs].sort((a, b) => {
+    const sceneDiff = numericSortValue(a.sceneIndex) - numericSortValue(b.sceneIndex);
+    if (sceneDiff) return sceneDiff;
+    const outputDiff = numericSortValue(a.outputIndex) - numericSortValue(b.outputIndex);
+    if (outputDiff) return outputDiff;
+    return String(a.filename || "").localeCompare(String(b.filename || ""), undefined, { numeric: true });
+  });
+}
+
+function numericSortValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : Number.MAX_SAFE_INTEGER;
 }
 
 async function returnToEditor() {

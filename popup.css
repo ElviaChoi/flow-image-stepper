@@ -364,6 +364,24 @@ button:disabled {
   background: #101720;
 }
 
+.summary-accordion-library {
+  border-color: #14b8a6;
+  background: linear-gradient(180deg, #0d4d47 0%, #0b302f 100%);
+  box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.12);
+}
+
+.summary-accordion-characters {
+  border-color: #f59e0b;
+  background: linear-gradient(180deg, #5a3409 0%, #33220b 100%);
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.13);
+}
+
+.summary-accordion-scenes {
+  border-color: #3b82f6;
+  background: linear-gradient(180deg, #123a72 0%, #102746 100%);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.12);
+}
+
 .summary-accordion summary {
   display: grid;
   gap: 2px;
@@ -398,10 +416,34 @@ button:disabled {
   font-weight: 800;
 }
 
+.summary-accordion-library .summary-accordion-title {
+  color: #d8fff8;
+}
+
+.summary-accordion-characters .summary-accordion-title {
+  color: #fff1c7;
+}
+
+.summary-accordion-scenes .summary-accordion-title {
+  color: #e0efff;
+}
+
 .summary-accordion-detail {
   color: #9fb0bf;
   font-size: 11px;
   line-height: 1.35;
+}
+
+.summary-accordion-library .summary-accordion-detail {
+  color: #9ff4e5;
+}
+
+.summary-accordion-characters .summary-accordion-detail {
+  color: #ffd48a;
+}
+
+.summary-accordion-scenes .summary-accordion-detail {
+  color: #b9d7ff;
 }
 
 .summary-accordion-body {
@@ -410,6 +452,21 @@ button:disabled {
 
 .summary-accordion .summary-card {
   margin: 0 10px;
+}
+
+.summary-accordion-library .summary-card {
+  border-color: #0f8f83;
+  background: #0b2c2d;
+}
+
+.summary-accordion-characters .summary-card {
+  border-color: #b77913;
+  background: #2a1c0a;
+}
+
+.summary-accordion-scenes .summary-card {
+  border-color: #315f9f;
+  background: #0f2440;
 }
 
 .summary-card {

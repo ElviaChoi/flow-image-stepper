@@ -357,9 +357,9 @@ function renderSummary() {
   summaryEl.innerHTML = "";
   summaryEl.append(
     buildOverviewSummary(),
-    buildSummaryAccordion("저장된 캐릭터 참조", getLibraryAccordionDetail(), buildLibrarySummary()),
-    buildSummaryAccordion("캐릭터 참조 상태", getCharacterAccordionDetail(), buildCharacterSummary()),
-    buildSummaryAccordion("장면 결과 상태", getSceneAccordionDetail(), buildSceneSummary())
+    buildSummaryAccordion("캐릭터 참조 보관함", getLibraryAccordionDetail(), buildLibrarySummary(), { tone: "library" }),
+    buildSummaryAccordion("캐릭터 준비 현황", getCharacterAccordionDetail(), buildCharacterSummary(), { tone: "characters" }),
+    buildSummaryAccordion("장면 저장 현황", getSceneAccordionDetail(), buildSceneSummary(), { tone: "scenes" })
   );
   renderPromptEditor();
 }
@@ -367,6 +367,7 @@ function renderSummary() {
 function buildSummaryAccordion(title, detail, content, options = {}) {
   const accordion = document.createElement("details");
   accordion.className = "summary-accordion";
+  if (options.tone) accordion.classList.add(`summary-accordion-${options.tone}`);
   if (options.open) accordion.open = true;
 
   const summary = document.createElement("summary");
@@ -384,20 +385,20 @@ function buildSummaryAccordion(title, detail, content, options = {}) {
 function getLibraryAccordionDetail() {
   const count = Object.keys(getProjectBucket(characterLibraryByProject, currentProjectId) || {}).length;
   if (parsed?.mode === "simple-scenes") return "간단 장면 모드";
-  return count ? `${count}개 저장` : "저장된 참조 없음";
+  return count ? `${count}개 보관` : "보관된 참조 없음";
 }
 
 function getCharacterAccordionDetail() {
   const total = parsed?.characters?.length || 0;
   if (!total) return "캐릭터 없음";
   const ready = parsed.characters.filter((character) => Boolean(characterRefs[character.id])).length;
-  return `${ready} / ${total} 준비`;
+  return `${ready} / ${total} 준비됨`;
 }
 
 function getSceneAccordionDetail() {
   const total = parsed?.scenes?.length || 0;
   if (!total) return "장면 없음";
-  return `${getSavedSceneCount()} / ${total} 저장`;
+  return `${getSavedSceneCount()} / ${total} 저장됨`;
 }
 
 function onPromptEditorAccordionToggle() {
@@ -493,7 +494,7 @@ function buildLibrarySummary() {
   }
 
   if (!libraryEntries.length) {
-    card.append(createEl("div", "summary-empty", "현재 프로젝트에 불러올 캐릭터 참조가 없습니다."));
+    card.append(createEl("div", "summary-empty", "현재 프로젝트 보관함에 캐릭터 참조가 없습니다."));
     return card;
   }
 
@@ -508,7 +509,7 @@ function buildLibrarySummary() {
         ? { label: "사용 중", className: "is-done" }
         : isCurrent
           ? { label: "불러오기", className: "is-next" }
-          : { label: "보관 중", className: "is-todo" }
+          : { label: "보관됨", className: "is-todo" }
     }));
   }
   return card;
@@ -530,7 +531,7 @@ function buildSceneSummary() {
 
   for (const [index, scene] of parsed.scenes.entries()) {
     const outputs = byScene.get(scene.index) || [];
-    const status = getSceneProgressStatus(index, sceneIndex, outputs.length);
+    const status = getSceneProgressStatus(scene, index, sceneIndex, outputs.length);
     const refs = scene.references.length ? scene.references.join(", ") : "참조 없음";
     const filenames = outputs.map((output) => output.filename).join(", ");
     const detail = `저장 ${outputs.length}개 / ${refs}${filenames ? ` / ${filenames}` : ""}`;
@@ -587,10 +588,20 @@ function getCharacterProgressStatus(character, index) {
   return { label: "대기", className: "is-todo" };
 }
 
-function getSceneProgressStatus(index, currentIndex, savedCount) {
-  if (index <= currentIndex) return getProgressStatus(index, currentIndex);
-  if (savedCount > 0) return { label: "\uc800\uc7a5\ub428", className: "is-done" };
-  return getProgressStatus(index, currentIndex);
+function getSceneProgressStatus(scene, index, currentIndex, savedCount) {
+  if (regenQueue?.scenes?.includes(scene?.index)) {
+    return { label: "재생성", className: "is-queued" };
+  }
+  if (savedCount > 0) {
+    return { label: "저장됨", className: "is-done" };
+  }
+  if (index === currentIndex) {
+    return { label: "다음", className: "is-next" };
+  }
+  if (index < currentIndex) {
+    return { label: "미저장", className: "is-todo" };
+  }
+  return { label: "대기", className: "is-todo" };
 }
 
 function createEl(tag, className = "", text = "") {
@@ -730,8 +741,8 @@ function getEditorMeta(item) {
   if (editorKind === "characters") {
     const ref = characterRefs[item.id];
     return ref
-      ? `저장된 캐릭터 참조가 있습니다: ${ref.mediaName || ref.href || item.id}`
-      : "아직 저장된 캐릭터 참조가 없습니다.";
+      ? `보관된 캐릭터 참조가 연결되어 있습니다: ${ref.mediaName || ref.href || item.id}`
+      : "아직 연결된 캐릭터 참조가 없습니다.";
   }
   const refs = item.references?.length ? item.references.join(", ") : "참조 없음";
   const saved = getSceneOutputCount(item.index);
@@ -982,8 +993,9 @@ async function runDownloadScenes() {
       return;
     }
 
-    setLog(`장면 이미지 다운로드를 요청했습니다: ${outputs.length}개`);
-    chrome.runtime.sendMessage({ type: "downloadSceneOutputs", outputs }, (response) => {
+    const orderedOutputs = sortSceneOutputsForDownload(outputs);
+    setLog(`장면 이미지 다운로드를 순서대로 요청했습니다: ${orderedOutputs.length}개`);
+    chrome.runtime.sendMessage({ type: "downloadSceneOutputs", outputs: orderedOutputs }, (response) => {
       if (chrome.runtime.lastError) {
         setLog(`실패: ${chrome.runtime.lastError.message}`);
         return;
@@ -992,9 +1004,24 @@ async function runDownloadScenes() {
         setLog(`오류: ${response?.message || "다운로드에 실패했습니다."}`);
         return;
       }
-      setLog(`다운로드를 시작했습니다: ${response.count}개`);
+      setLog(`다운로드를 완료했습니다: ${response.count}개`);
     });
   });
+}
+
+function sortSceneOutputsForDownload(outputs) {
+  return [...outputs].sort((a, b) => {
+    const sceneDiff = numericSortValue(a.sceneIndex) - numericSortValue(b.sceneIndex);
+    if (sceneDiff) return sceneDiff;
+    const outputDiff = numericSortValue(a.outputIndex) - numericSortValue(b.outputIndex);
+    if (outputDiff) return outputDiff;
+    return String(a.filename || "").localeCompare(String(b.filename || ""), undefined, { numeric: true });
+  });
+}
+
+function numericSortValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : Number.MAX_SAFE_INTEGER;
 }
 
 async function runDownloadScenesFromPage() {
