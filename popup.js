@@ -1,4 +1,9 @@
 const sourceEl = document.getElementById("source");
+const characterBuilderRowsEl = document.getElementById("characterBuilderRows");
+const sceneBuilderRowsEl = document.getElementById("sceneBuilderRows");
+const addCharacterEl = document.getElementById("addCharacter");
+const addSceneEl = document.getElementById("addScene");
+const buildSourceEl = document.getElementById("buildSource");
 const summaryEl = document.getElementById("summary");
 const logEl = document.getElementById("log");
 const modelEl = document.getElementById("model");
@@ -118,6 +123,7 @@ function init() {
         editorKind = characterIndex < parsed.characters.length ? "characters" : "scenes";
         editorIndex = editorKind === "characters" ? characterIndex : sceneIndex;
         renderSummary();
+        hydrateBuilderFromParsed(parsed);
       }
     });
   });
@@ -133,6 +139,9 @@ function init() {
   importLibraryEl?.addEventListener("click", () => importFileEl?.click());
   importFileEl?.addEventListener("change", importCharacterLibraryBackup);
   document.getElementById("clearSource").addEventListener("click", clearSource);
+  addCharacterEl?.addEventListener("click", () => addBuilderCharacter());
+  addSceneEl?.addEventListener("click", () => addBuilderScene());
+  buildSourceEl?.addEventListener("click", buildSourceFromBuilder);
   modelEl.addEventListener("change", saveSettings);
   sceneCountEl.addEventListener("change", saveSettings);
   aspectRatioEl.addEventListener("change", saveSettings);
@@ -140,6 +149,265 @@ function init() {
   promptEditorAccordionEl?.addEventListener("toggle", onPromptEditorAccordionToggle);
   updateSettingsNote();
   updatePromptEditorAccordionSummary();
+  ensureInitialBuilderRows();
+}
+
+function ensureInitialBuilderRows() {
+  if (!characterBuilderRowsEl || !sceneBuilderRowsEl) return;
+  if (!characterBuilderRowsEl.children.length) addBuilderCharacter();
+  if (!sceneBuilderRowsEl.children.length) addBuilderScene();
+}
+
+function hydrateBuilderFromParsed(nextParsed) {
+  if (!characterBuilderRowsEl || !sceneBuilderRowsEl || !nextParsed) return;
+  characterBuilderRowsEl.innerHTML = "";
+  sceneBuilderRowsEl.innerHTML = "";
+  for (const character of nextParsed.characters || []) {
+    addBuilderCharacter({
+      id: character.id || "",
+      name: character.name || String(character.id || "").replace(/_CS-\d{2}$/i, ""),
+      prompt: character.prompt || ""
+    });
+  }
+  for (const scene of nextParsed.scenes || []) {
+    addBuilderScene({
+      title: scene.placement || `장면 ${scene.index || sceneBuilderRowsEl.children.length + 1}`,
+      references: scene.references || [],
+      prompt: scene.prompt || ""
+    });
+  }
+  ensureInitialBuilderRows();
+  syncBuilderTitles();
+  syncSceneCharacterOptions();
+}
+
+function addBuilderCharacter(data = {}) {
+  const index = characterBuilderRowsEl.children.length;
+  const card = createEl("div", "builder-card builder-character-card");
+  card.dataset.kind = "character";
+
+  const header = createEl("div", "builder-card-header");
+  header.append(
+    createEl("div", "builder-card-title", `캐릭터 ${index + 1}`),
+    buildRemoveBuilderButton(card)
+  );
+
+  const grid = createEl("div", "builder-grid");
+  const nameInput = buildBuilderInput("이름", "예: 연화", data.name || "");
+  nameInput.classList.add("builder-character-name");
+  const idInput = buildBuilderInput("캐릭터 ID", "예: 연화_CS-01", data.id || "");
+  idInput.classList.add("builder-character-id");
+  if (data.id) idInput.dataset.touched = "true";
+  const promptInput = buildBuilderTextarea("캐릭터 시트 프롬프트", "외형, 의상, 표정, 기준 포즈 등 캐릭터 시트에 넣을 프롬프트", data.prompt || "");
+  promptInput.classList.add("builder-character-prompt");
+
+  nameInput.addEventListener("input", () => {
+    if (idInput.dataset.touched === "true") {
+      syncSceneCharacterOptions();
+      return;
+    }
+    idInput.value = makeBuilderCharacterId(nameInput.value, getBuilderCardIndex(card));
+    syncSceneCharacterOptions();
+  });
+  idInput.addEventListener("input", () => {
+    idInput.dataset.touched = "true";
+    syncSceneCharacterOptions();
+  });
+
+  grid.append(
+    wrapBuilderField("이름", nameInput),
+    wrapBuilderField("캐릭터 ID", idInput),
+    wrapBuilderField("캐릭터 시트 프롬프트", promptInput)
+  );
+  card.append(header, grid);
+  characterBuilderRowsEl.append(card);
+  if (!idInput.value) idInput.value = makeBuilderCharacterId(nameInput.value, index);
+  syncBuilderTitles();
+  syncSceneCharacterOptions();
+}
+
+function addBuilderScene(data = {}) {
+  const index = sceneBuilderRowsEl.children.length;
+  const card = createEl("div", "builder-card builder-scene-card");
+  card.dataset.kind = "scene";
+
+  const header = createEl("div", "builder-card-header");
+  header.append(
+    createEl("div", "builder-card-title", `장면 ${index + 1}`),
+    buildRemoveBuilderButton(card)
+  );
+
+  const titleInput = buildBuilderInput("장면 제목", "예: 비 오는 골목", data.title || "");
+  titleInput.classList.add("builder-scene-title");
+  const refs = createEl("div", "scene-character-list");
+  refs.dataset.selected = (data.references || []).join(",");
+  const promptInput = buildBuilderTextarea("장면 프롬프트", "장면 구도, 배경, 행동, 분위기 등을 입력하세요.", data.prompt || "");
+  promptInput.classList.add("builder-scene-prompt");
+
+  const grid = createEl("div", "builder-grid");
+  grid.append(
+    wrapBuilderField("장면 제목", titleInput),
+    wrapBuilderField("등장 캐릭터", refs),
+    wrapBuilderField("장면 프롬프트", promptInput)
+  );
+  card.append(header, grid);
+  sceneBuilderRowsEl.append(card);
+  syncBuilderTitles();
+  syncSceneCharacterOptions();
+}
+
+function buildRemoveBuilderButton(card) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "builder-remove";
+  button.textContent = "삭제";
+  button.addEventListener("click", () => {
+    card.remove();
+    syncBuilderTitles();
+    syncSceneCharacterOptions();
+  });
+  return button;
+}
+
+function buildBuilderInput(label, placeholder, value = "") {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.setAttribute("aria-label", label);
+  input.placeholder = placeholder;
+  input.value = value;
+  return input;
+}
+
+function buildBuilderTextarea(label, placeholder, value = "") {
+  const textarea = document.createElement("textarea");
+  textarea.setAttribute("aria-label", label);
+  textarea.spellcheck = false;
+  textarea.placeholder = placeholder;
+  textarea.value = value;
+  return textarea;
+}
+
+function wrapBuilderField(labelText, input) {
+  const field = createEl("div", "builder-field");
+  field.append(createEl("span", "", labelText), input);
+  return field;
+}
+
+function syncBuilderTitles() {
+  [...characterBuilderRowsEl.querySelectorAll(".builder-character-card")].forEach((card, index) => {
+    card.querySelector(".builder-card-title").textContent = `캐릭터 ${index + 1}`;
+    const idInput = card.querySelector(".builder-character-id");
+    if (idInput && !idInput.dataset.touched) {
+      idInput.value = makeBuilderCharacterId(card.querySelector(".builder-character-name")?.value || "", index);
+    }
+  });
+  [...sceneBuilderRowsEl.querySelectorAll(".builder-scene-card")].forEach((card, index) => {
+    card.querySelector(".builder-card-title").textContent = `장면 ${index + 1}`;
+  });
+}
+
+function getBuilderCardIndex(card) {
+  const rows = card.dataset.kind === "scene" ? sceneBuilderRowsEl : characterBuilderRowsEl;
+  return [...rows.children].indexOf(card);
+}
+
+function getBuilderCharacters() {
+  return [...characterBuilderRowsEl.querySelectorAll(".builder-character-card")]
+    .map((card, index) => {
+      const name = card.querySelector(".builder-character-name")?.value.trim() || `캐릭터 ${index + 1}`;
+      const id = normalizeCharacterId(card.querySelector(".builder-character-id")?.value || makeBuilderCharacterId(name, index));
+      const prompt = card.querySelector(".builder-character-prompt")?.value.trim() || "";
+      return { name, id, prompt };
+    })
+    .filter((item) => item.name || item.id || item.prompt);
+}
+
+function getBuilderScenes() {
+  return [...sceneBuilderRowsEl.querySelectorAll(".builder-scene-card")]
+    .map((card, index) => {
+      const title = card.querySelector(".builder-scene-title")?.value.trim() || `장면 ${index + 1}`;
+      const references = [...card.querySelectorAll(".scene-character-list input:checked")]
+        .map((input) => normalizeCharacterId(input.value))
+        .filter(Boolean);
+      const prompt = card.querySelector(".builder-scene-prompt")?.value.trim() || "";
+      return { title, references, prompt };
+    })
+    .filter((item) => item.title || item.references.length || item.prompt);
+}
+
+function syncSceneCharacterOptions() {
+  const characters = getBuilderCharacters();
+  for (const list of sceneBuilderRowsEl.querySelectorAll(".scene-character-list")) {
+    const selected = new Set([
+      ...(list.dataset.selected || "").split(","),
+      ...[...list.querySelectorAll("input:checked")].map((input) => input.value)
+    ].map((id) => normalizeCharacterId(id)).filter(Boolean));
+    list.innerHTML = "";
+    if (!characters.length) {
+      list.append(createEl("div", "builder-empty", "먼저 캐릭터를 추가하세요."));
+      continue;
+    }
+    for (const character of characters) {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = character.id;
+      checkbox.checked = selected.has(character.id);
+      checkbox.addEventListener("change", () => {
+        list.dataset.selected = [...list.querySelectorAll("input:checked")]
+          .map((input) => input.value)
+          .join(",");
+      });
+      label.append(checkbox, createEl("span", "", `${character.name} (${character.id})`));
+      list.append(label);
+    }
+    list.dataset.selected = [...list.querySelectorAll("input:checked")]
+      .map((input) => input.value)
+      .join(",");
+  }
+}
+
+async function buildSourceFromBuilder() {
+  syncBuilderTitles();
+  syncSceneCharacterOptions();
+  const characters = getBuilderCharacters();
+  const scenes = getBuilderScenes();
+  const hasCharacterPrompt = characters.some((item) => item.prompt);
+  const hasScenePrompt = scenes.some((item) => item.prompt);
+  if (!hasCharacterPrompt && !hasScenePrompt) {
+    setLog("캐릭터나 장면 프롬프트를 먼저 입력하세요.");
+    return;
+  }
+
+  const lines = [];
+  for (const character of characters.filter((item) => item.prompt)) {
+    lines.push(`캐릭터 시트 프롬프트 - ${character.id}`);
+    lines.push(`이름: ${character.name}`);
+    lines.push("프롬프트:");
+    lines.push(character.prompt);
+    lines.push("");
+  }
+  scenes.filter((item) => item.prompt).forEach((scene, index) => {
+    lines.push(`장면 이미지 프롬프트 ${index + 1}`);
+    if (scene.title) lines.push(`배치: ${scene.title}`);
+    lines.push(`등장인물: ${scene.references.length ? scene.references.join(", ") : "참조 없음"}`);
+    lines.push("프롬프트:");
+    lines.push(scene.prompt);
+    lines.push("");
+  });
+
+  sourceEl.value = lines.join("\n").trim();
+  await parseInput();
+}
+
+function makeBuilderCharacterId(name, index) {
+  const cleaned = String(name || `Character ${index + 1}`)
+    .trim()
+    .replace(/_CS-\d{2}$/i, "");
+  const slug = cleaned
+    .replace(/[^\w\u3131-\uD79D-]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "Character";
+  return `${slug}_CS-${String(index + 1).padStart(2, "0")}`;
 }
 
 async function parseInput() {
@@ -173,8 +441,13 @@ async function parseInput() {
     ...getCurrentSettings()
   });
   renderSummary();
+  hydrateBuilderFromParsed(parsed);
   if (parsed.mode === "simple-scenes") {
     setLog(`장면 헤더가 없어 빈 줄 기준으로 ${parsed.scenes.length}개 장면을 만들었습니다. 캐릭터 참조는 적용되지 않습니다.`);
+  } else if (parsed.mode === "prompt-pack") {
+    setLog(`프롬프트 묶음에서 캐릭터 ${parsed.characters.length}개와 장면 ${parsed.scenes.length}개를 인식했습니다. 프롬프트 본문은 그대로 사용합니다.`);
+  } else if (parsed.mode === "friendly-story") {
+    setLog(`쉬운 입력 모드로 캐릭터 ${parsed.characters.length}개와 장면 ${parsed.scenes.length}개를 만들었습니다. 장면에 등장한 캐릭터 이름은 자동으로 참조 연결했습니다.`);
   } else {
     setLog("캐릭터/장면 목록을 만들었습니다.");
   }
@@ -450,11 +723,17 @@ function buildOverviewSummary() {
 }
 
 function getParseModeLabel() {
-  return parsed?.mode === "simple-scenes" ? "간단 장면" : "정식 포맷";
+  if (parsed?.mode === "simple-scenes") return "간단 장면";
+  if (parsed?.mode === "prompt-pack") return "프롬프트 묶음";
+  if (parsed?.mode === "friendly-story") return "쉬운 입력";
+  return "정식 포맷";
 }
 
 function getParseModeDetail() {
-  return parsed?.mode === "simple-scenes" ? "캐릭터 참조 없음" : "캐릭터 참조 사용";
+  if (parsed?.mode === "simple-scenes") return "캐릭터 참조 없음";
+  if (parsed?.mode === "prompt-pack") return "본문 유지, 참조 자동 연결";
+  if (parsed?.mode === "friendly-story") return "이름 기반 참조 자동 연결";
+  return "캐릭터 참조 사용";
 }
 
 function buildCharacterSummary() {

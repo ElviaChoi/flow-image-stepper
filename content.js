@@ -219,7 +219,9 @@ async function ensureProjectEditor() {
 
 async function setGenerationSettings({ mode, model, aspectRatio, count }) {
   const settingsButton = findSettingsButton();
-  if (!settingsButton) throw new Error("생성 설정 버튼을 찾지 못했습니다.");
+  if (!settingsButton) {
+    throw new Error("생성 설정 버튼을 찾지 못했습니다. Flow 입력창 아래의 모델/비율/장면 수 설정 버튼이 보이는지 확인해 주세요.");
+  }
   if (isCurrentSetting(settingsButton, model, aspectRatio, count)) {
     return;
   }
@@ -236,20 +238,28 @@ async function setGenerationSettings({ mode, model, aspectRatio, count }) {
   clickSettingText(mode, { optional: true });
   await delay(80);
   if (model) {
-    await clickModelSetting(model);
+    await clickModelSetting(model, settingsButton);
     await delay(80);
   }
   clickSettingText(aspectRatio);
   await delay(80);
   const countWasSelected = clickCountSetting(count);
+  if (!countWasSelected) {
+    throw new Error(`장면 생성 수 설정을 찾지 못했습니다: x${count}`);
+  }
   console.info("[Flow Stepper] clicked settings", {
     selected: getSelectedSettingsText(),
     trigger: settingsButton.textContent
   });
-  await waitFor(() => isCurrentSetting(settingsButton, model, aspectRatio, count, { requireCount: countWasSelected }) ||
-    isOpenSettingSelected(model, aspectRatio, count, { requireCount: countWasSelected }), 8000, 150);
-  closeOpenMenus();
-  await delay(120);
+  try {
+    await waitFor(() => isCurrentSetting(settingsButton, model, aspectRatio, count, { requireCount: countWasSelected }) ||
+      isOpenSettingSelected(model, aspectRatio, count, { requireCount: countWasSelected }), 8000, 150);
+  } catch {
+    throw new Error(`Flow 설정 적용을 확인하지 못했습니다: ${model}, x${count}, ${aspectRatio}`);
+  } finally {
+    closeOpenMenus();
+    await delay(120);
+  }
 }
 
 function closeOpenMenus() {
@@ -279,15 +289,8 @@ async function waitForSettingsPanel(settingsButton, timeoutMs) {
 
 function isCurrentSetting(button, model, aspectRatio, count, options = { requireCount: true }) {
   const text = normalize(button.textContent);
-  const aspectMap = {
-    "16:9": "crop_16_9",
-    "4:3": "crop_landscape",
-    "1:1": "crop_square",
-    "3:4": "crop_portrait",
-    "9:16": "crop_9_16"
-  };
   const hasCount = !options.requireCount || hasCountSelectionToken(text, count);
-  const hasAspect = text.includes(normalize(aspectRatio)) || text.includes(aspectMap[aspectRatio]);
+  const hasAspect = hasAspectSelectionToken(text, aspectRatio);
   const hasModel = !model || text.includes(normalize(model));
   return hasModel && hasCount && hasAspect;
 }
@@ -296,17 +299,22 @@ function isOpenSettingSelected(model, aspectRatio, count, options = { requireCou
   const selectedText = normalize(getSelectedSettingsText());
   const hasModel = !model || selectedText.includes(normalize(model));
   const hasCount = !options.requireCount || hasCountSelectionToken(selectedText, count);
-  const hasAspect = selectedText.includes(normalize(aspectRatio));
+  const hasAspect = hasAspectSelectionToken(selectedText, aspectRatio);
   return hasModel && hasCount && hasAspect;
 }
 
 function getSelectedSettingsText() {
   const surfaces = getSettingsSurfaces();
   const tabs = surfaces.flatMap((surface) => [...surface.querySelectorAll('button[role="tab"]')]);
-  return tabs
+  const activeTabs = tabs
     .filter((tab) => tab.getAttribute("aria-selected") === "true" || tab.getAttribute("data-state") === "active")
     .map((tab) => tab.textContent)
     .join(" ");
+  const menuButtons = surfaces
+    .flatMap((surface) => [...surface.querySelectorAll('button[aria-haspopup="menu"]')])
+    .map((button) => button.textContent)
+    .join(" ");
+  return `${activeTabs} ${menuButtons}`.trim();
 }
 
 function findSettingsButton() {
@@ -375,10 +383,10 @@ function findPromptBar() {
   return null;
 }
 
-async function clickModelSetting(model) {
-  const currentButton = findModelDropdownButton();
+async function clickModelSetting(model, settingsButton = null) {
+  const currentButton = findModelDropdownButton(settingsButton);
   if (!currentButton) {
-    clickSettingText(model, { optional: true });
+    clickSettingText(model);
     return;
   }
 
@@ -395,10 +403,11 @@ async function clickModelSetting(model) {
   clickSettingText(model);
 }
 
-function findModelDropdownButton() {
+function findModelDropdownButton(settingsButton = null) {
   const surfaces = getSettingsSurfaces();
   const buttons = surfaces.flatMap((surface) => [...surface.querySelectorAll("button")]);
   return buttons.find((button) => {
+    if (settingsButton && button === settingsButton) return false;
     const text = normalize(button.textContent);
     return button.getAttribute("aria-haspopup") === "menu" &&
       ((text.includes("Nano") && text.includes("Banana")) || text.includes("Imagen"));
@@ -500,6 +509,9 @@ function findVisibleSettingCandidate(text) {
       const aExact = normalize(a.textContent) === normalizedText ? 0 : 1;
       const bExact = normalize(b.textContent) === normalizedText ? 0 : 1;
       if (aExact !== bExact) return aExact - bExact;
+      const aInteractive = isInteractiveSettingCandidate(a) ? 0 : 1;
+      const bInteractive = isInteractiveSettingCandidate(b) ? 0 : 1;
+      if (aInteractive !== bInteractive) return aInteractive - bInteractive;
       return (ar.width * ar.height) - (br.width * br.height);
     })[0] || null;
 }
@@ -534,8 +546,19 @@ function findVisibleCountCandidate(count) {
       const aExact = aText === `x${countText}` || aText === countText ? 0 : 1;
       const bExact = bText === `x${countText}` || bText === countText ? 0 : 1;
       if (aExact !== bExact) return aExact - bExact;
+      const aInteractive = isInteractiveSettingCandidate(a) ? 0 : 1;
+      const bInteractive = isInteractiveSettingCandidate(b) ? 0 : 1;
+      if (aInteractive !== bInteractive) return aInteractive - bInteractive;
       return (ar.width * ar.height) - (br.width * br.height);
     })[0] || null;
+}
+
+function isInteractiveSettingCandidate(element) {
+  const role = element.getAttribute("role");
+  return element.tagName === "BUTTON" ||
+    role === "tab" ||
+    role === "menuitem" ||
+    role === "option";
 }
 
 function hasCountToken(value, countText) {
@@ -556,12 +579,25 @@ function hasCountSelectionToken(text, count) {
   const normalized = normalize(text).toLowerCase();
   const countText = String(count);
   return normalized.includes(`x${countText}`) ||
+    normalized.includes(`${countText}x`) ||
     normalized.includes(`count${countText}`) ||
     normalized.includes(`count_${countText}`) ||
     normalized.includes(`numimages${countText}`) ||
     normalized.includes(`num_images_${countText}`) ||
     normalized.endsWith(`-${countText}`) ||
     normalized.endsWith(`_${countText}`);
+}
+
+function hasAspectSelectionToken(text, aspectRatio) {
+  const normalized = normalize(text);
+  const aspectMap = {
+    "16:9": ["16:9", "crop_16_9", "landscape"],
+    "4:3": ["4:3", "crop_landscape", "landscape_4_3"],
+    "1:1": ["1:1", "crop_square", "square"],
+    "3:4": ["3:4", "crop_portrait", "portrait_3_4"],
+    "9:16": ["9:16", "crop_9_16", "portrait"]
+  };
+  return (aspectMap[aspectRatio] || [aspectRatio]).some((token) => normalized.includes(normalize(token)));
 }
 
 function getSettingsSurfaces() {

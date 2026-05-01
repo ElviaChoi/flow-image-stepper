@@ -13,10 +13,59 @@
         <p>캐릭터 일관성을 유지할 수 있도록 캐릭터 시트와 장면 이미지를 Flow에서 단계별로 생성합니다.</p>
       </header>
 
-      <label class="field">
-        <span>전체 프롬프트 원본</span>
-        <textarea id="source" spellcheck="false" placeholder="캐릭터 시트와 장면 프롬프트 전체를 붙여넣으세요. 장면만 넣으면 빈 줄 기준으로 나눕니다."></textarea>
-      </label>
+      <details class="prompt-builder">
+        <summary class="builder-summary">
+          <div>
+            <h2>직접 입력</h2>
+            <p>캐릭터와 장면을 나눠 작성합니다.</p>
+          </div>
+        </summary>
+
+        <div class="builder-body">
+          <div class="builder-body-actions">
+            <button id="buildSource" type="button" class="button-primary">이 입력으로 준비하기</button>
+          </div>
+
+          <div class="builder-columns">
+            <section class="builder-panel builder-panel-characters">
+              <div class="builder-panel-header">
+                <h3>캐릭터</h3>
+                <button id="addCharacter" type="button">추가</button>
+              </div>
+              <div id="characterBuilderRows" class="builder-rows"></div>
+            </section>
+
+            <section class="builder-panel builder-panel-scenes">
+              <div class="builder-panel-header">
+                <h3>장면</h3>
+                <button id="addScene" type="button">추가</button>
+              </div>
+              <div id="sceneBuilderRows" class="builder-rows"></div>
+            </section>
+          </div>
+        </div>
+      </details>
+
+      <section class="source-panel">
+        <div class="source-panel-header">
+          <h2>원본 텍스트</h2>
+          <p>붙여넣은 내용을 그대로 분석합니다.</p>
+        </div>
+        <textarea id="source" spellcheck="false" placeholder="캐릭터 시트와 장면 프롬프트를 붙여넣으세요.
+
+캐릭터 시트 프롬프트 - 한수_CS-01
+프롬프트:
+한수 캐릭터 시트 이미지 프롬프트...
+
+장면 이미지 프롬프트 1
+등장인물: 한수_CS-01
+프롬프트:
+비 오는 골목을 걷는 한수 장면 이미지 프롬프트..."></textarea>
+        <div class="source-panel-actions">
+          <button id="parse" class="source-prepare-button">원본 텍스트로 준비하기</button>
+          <button id="clearSource" type="button" class="button-muted">작업 초기화</button>
+        </div>
+      </section>
 
       <section class="settings">
         <label>
@@ -50,15 +99,6 @@
       <div id="settingsNote" class="settings-note"></div>
 
       <section class="actions">
-        <div class="action-group">
-          <h2>준비</h2>
-          <p class="action-hint">전체 프롬프트를 캐릭터와 장면 목록으로 나눕니다. 장면만 있으면 간단 장면 모드로 준비합니다.</p>
-          <div class="button-grid">
-            <button id="parse" class="button-primary">프롬프트 목록 만들기</button>
-            <button id="clearSource" type="button" class="button-muted">작업 초기화</button>
-          </div>
-        </div>
-
         <div class="action-group">
           <h2>생성</h2>
           <p class="action-hint">캐릭터 시트를 먼저 만들고, 보관된 캐릭터 참조로 장면을 생성합니다.</p>
