@@ -26,6 +26,9 @@ const CHARACTER_REFS_BY_PROJECT_KEY = "characterRefsByProject";
 const PROJECT_LAST_USED_KEY = "projectLastUsedAt";
 const PROMPT_EDITOR_EXPANDED_KEY = "promptEditorExpanded";
 const REGEN_QUEUE_BY_PROJECT_KEY = "regenQueueByProject";
+const SCENE_LAST_INDEX_BY_PROJECT_KEY = "sceneLastIndexByProject";
+const SCENE_OUTPUTS_BY_PROJECT_KEY = "sceneOutputsByProject";
+const WORKFLOW_PROJECT_ID_KEY = "workflowProjectId";
 const MAX_REFS_PER_PROJECT = 200;
 
 let parsed = null;
@@ -43,8 +46,11 @@ let editorKind = "characters";
 let editorIndex = 0;
 let promptEditorExpanded = false;
 let regenQueueByProject = {};
+let sceneLastIndexByProject = {};
+let sceneOutputsByProject = {};
 let regenQueue = { characters: [], scenes: [] };
 let lastRunSelection = null;
+let activeFlowWithoutProject = false;
 
 init();
 
@@ -78,11 +84,20 @@ function resolveFallbackProjectId() {
     if (!projectId) continue;
     if (!candidates.has(projectId)) candidates.set(projectId, 0);
   }
+  for (const projectId of Object.keys(sceneLastIndexByProject || {})) {
+    if (!projectId) continue;
+    if (!candidates.has(projectId)) candidates.set(projectId, 0);
+  }
+  for (const projectId of Object.keys(sceneOutputsByProject || {})) {
+    if (!projectId) continue;
+    if (!candidates.has(projectId)) candidates.set(projectId, 0);
+  }
   if (!candidates.size) return "";
   return [...candidates.entries()].sort((a, b) => (b[1] - a[1]) || a[0].localeCompare(b[0]))[0][0];
 }
 
 function ensureProjectContextFromStorage() {
+  if (activeFlowWithoutProject) return;
   if (currentProjectId) return;
   const fallback = resolveFallbackProjectId();
   if (!fallback) return;
@@ -95,7 +110,8 @@ function init() {
     chrome.storage.local.get([
       "source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs",
       CHARACTER_REFS_BY_PROJECT_KEY, CHARACTER_LIBRARY_BY_PROJECT_KEY, PROJECT_LAST_USED_KEY,
-      REGEN_QUEUE_BY_PROJECT_KEY,
+      REGEN_QUEUE_BY_PROJECT_KEY, SCENE_LAST_INDEX_BY_PROJECT_KEY, SCENE_OUTPUTS_BY_PROJECT_KEY,
+      WORKFLOW_PROJECT_ID_KEY,
       "checkpoint", "model", "sceneCount", "aspectRatio", "debug", PROMPT_EDITOR_EXPANDED_KEY
     ], (data) => {
       if (data.source) sourceEl.value = data.source;
@@ -109,13 +125,41 @@ function init() {
       characterLibraryByProject = data[CHARACTER_LIBRARY_BY_PROJECT_KEY] || {};
       projectLastUsedAt = data[PROJECT_LAST_USED_KEY] || {};
       regenQueueByProject = data[REGEN_QUEUE_BY_PROJECT_KEY] || {};
+      sceneLastIndexByProject = data[SCENE_LAST_INDEX_BY_PROJECT_KEY] || {};
+      sceneOutputsByProject = data[SCENE_OUTPUTS_BY_PROJECT_KEY] || {};
       ensureProjectContextFromStorage();
+      sceneOutputs = getProjectBucket(sceneOutputsByProject, currentProjectId);
       characterRefs = getProjectBucket(characterRefsByProject, currentProjectId);
       characterLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
       regenQueue = normalizeRegenQueue(getProjectBucket(regenQueueByProject, currentProjectId));
       checkpoint = data.checkpoint || null;
       promptEditorExpanded = Boolean(data[PROMPT_EDITOR_EXPANDED_KEY]);
       syncPromptEditorAccordion();
+      const workflowProjectId = data[WORKFLOW_PROJECT_ID_KEY] || "";
+      const hasKnownProjectState = Boolean(
+        currentProjectId && (
+          characterRefsByProject[currentProjectId] ||
+          characterLibraryByProject[currentProjectId] ||
+          sceneOutputsByProject[currentProjectId]
+        )
+      );
+      const isDifferentProjectWorkflow = currentProjectId && (
+        (workflowProjectId && workflowProjectId !== currentProjectId) ||
+        (!workflowProjectId && !hasKnownProjectState)
+      );
+      if (activeFlowWithoutProject || isDifferentProjectWorkflow) {
+        sourceEl.value = "";
+        parsed = null;
+        characterIndex = 0;
+        sceneIndex = 0;
+        editorKind = "characters";
+        editorIndex = 0;
+        summaryEl.classList.add("empty");
+        summaryEl.classList.remove("summary-dashboard");
+        summaryEl.textContent = "아직 목록이 없습니다.";
+        renderPromptEditor();
+        return;
+      }
       if (data.parsed) {
         parsed = data.parsed;
         characterIndex = data.characterIndex || 0;
@@ -449,14 +493,20 @@ function makeBuilderCharacterId(name, index) {
 async function parseInput() {
   if (!confirmParseReset()) return;
   await refreshCurrentProjectContext();
+  await refreshSavedState({ render: false });
+  const previousSceneOutputs = Array.isArray(sceneOutputs) ? [...sceneOutputs] : [];
+  const lastSavedSceneIndex = getLastSavedSceneIndex(previousSceneOutputs);
+  rememberLastSavedSceneIndex(lastSavedSceneIndex);
   parsed = FlowPromptParser.parse(sourceEl.value);
+  const sceneContinuation = alignSceneNumberingWithSavedOutputs(parsed, previousSceneOutputs, lastSavedSceneIndex);
+  parsed = sceneContinuation.parsed;
   // Normalize references so Flow scenes can find saved character refs
   for (const scene of parsed?.scenes || []) {
     if (!scene?.references?.length) continue;
     scene.references = scene.references.map((id) => normalizeCharacterId(id)).filter(Boolean);
   }
-  sceneIndex = 0;
-  sceneOutputs = [];
+  sceneIndex = sceneContinuation.sceneIndex;
+  sceneOutputs = previousSceneOutputs;
   characterRefs = await getRestoredCharacterRefs(parsed, currentProjectId, { includeAllWhenNoIds: true });
   characterIndex = getNextCharacterIndex(parsed, characterRefs);
   checkpoint = null;
@@ -464,6 +514,7 @@ async function parseInput() {
   if (currentProjectId) {
     characterRefsByProject[currentProjectId] = characterRefs;
     regenQueueByProject[currentProjectId] = regenQueue;
+    sceneOutputsByProject[currentProjectId] = sceneOutputs;
   }
   chrome.storage.local.set({
     source: sourceEl.value,
@@ -472,7 +523,10 @@ async function parseInput() {
     sceneIndex,
     [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject,
     [REGEN_QUEUE_BY_PROJECT_KEY]: regenQueueByProject,
-    sceneOutputs: [],
+    [SCENE_LAST_INDEX_BY_PROJECT_KEY]: sceneLastIndexByProject,
+    [SCENE_OUTPUTS_BY_PROJECT_KEY]: sceneOutputsByProject,
+    [WORKFLOW_PROJECT_ID_KEY]: currentProjectId || "",
+    sceneOutputs: currentProjectId ? sceneOutputs : [],
     checkpoint: null,
     ...getCurrentSettings()
   });
@@ -489,9 +543,73 @@ async function parseInput() {
   }
 }
 
+function getLastSavedSceneIndex(outputs = []) {
+  const outputMax = outputs.reduce((max, output) => {
+    const value = Number(output?.sceneIndex);
+    return Number.isFinite(value) ? Math.max(max, value) : max;
+  }, 0);
+  const projectMax = Number(sceneLastIndexByProject?.[currentProjectId] || 0);
+  return Math.max(outputMax, Number.isFinite(projectMax) ? projectMax : 0);
+}
+
+function rememberLastSavedSceneIndex(value) {
+  const sceneNumber = Number(value || 0);
+  if (!currentProjectId || !Number.isFinite(sceneNumber) || sceneNumber <= 0) return;
+  sceneLastIndexByProject[currentProjectId] = Math.max(
+    Number(sceneLastIndexByProject[currentProjectId] || 0),
+    sceneNumber
+  );
+}
+
+function alignSceneNumberingWithSavedOutputs(nextParsed, previousOutputs = [], lastSavedSceneIndex = 0) {
+  const fallback = { parsed: nextParsed, sceneIndex: 0 };
+  if (!nextParsed?.scenes?.length) return fallback;
+
+  const maxSavedSceneIndex = Number(lastSavedSceneIndex || 0);
+  if (!maxSavedSceneIndex) return fallback;
+
+  const savedSceneIndexes = new Set(
+    previousOutputs
+      .map((output) => Number(output?.sceneIndex))
+      .filter((value) => Number.isFinite(value))
+  );
+
+  const sceneIndexes = nextParsed.scenes
+    .map((scene) => Number(scene?.index))
+    .filter((value) => Number.isFinite(value));
+  const nextUnsavedSceneIndex = nextParsed.scenes.findIndex((scene) => {
+    const value = Number(scene?.index);
+    if (!Number.isFinite(value)) return true;
+    if (savedSceneIndexes.size) return !savedSceneIndexes.has(value);
+    return value > maxSavedSceneIndex;
+  });
+  const sceneIndex = nextUnsavedSceneIndex >= 0 ? nextUnsavedSceneIndex : nextParsed.scenes.length;
+  if (!sceneIndexes.length) return { parsed: nextParsed, sceneIndex };
+
+  const minSceneIndex = Math.min(...sceneIndexes);
+  const maxSceneIndex = Math.max(...sceneIndexes);
+  if (minSceneIndex !== 1 || maxSceneIndex > maxSavedSceneIndex) {
+    return { parsed: nextParsed, sceneIndex };
+  }
+
+  const offset = maxSavedSceneIndex;
+  const batchTotal = nextParsed.scenes.length;
+  return {
+    parsed: {
+      ...nextParsed,
+      scenes: nextParsed.scenes.map((scene) => ({
+        ...scene,
+        index: Number(scene.index) + offset,
+        total: Math.max(Number(scene.total) || batchTotal, batchTotal) + offset
+      }))
+    },
+    sceneIndex: 0
+  };
+}
+
 function confirmParseReset() {
   if (!hasInProgressWorkflow()) return true;
-  return window.confirm("이미 작업 중입니다. 프롬프트 목록을 다시 만들면 진행 상태와 저장된 장면 결과가 초기화됩니다. 계속할까요?");
+  return window.confirm("이미 작업 중입니다. 프롬프트 목록을 다시 만들면 기존 저장 장면은 유지하고 다음 장면부터 이어갑니다. 새 작업으로 완전히 초기화하려면 먼저 입력 지우기를 눌러주세요. 계속할까요?");
 }
 
 function hasInProgressWorkflow() {
@@ -1069,6 +1187,17 @@ function getSavedSceneCount() {
   return new Set(sceneOutputs.map((output) => output.sceneIndex)).size;
 }
 
+function persistCurrentSceneOutputs(extra = {}) {
+  if (currentProjectId) {
+    sceneOutputsByProject[currentProjectId] = sceneOutputs;
+  }
+  return new Promise((resolve) => chrome.storage.local.set({
+    [SCENE_OUTPUTS_BY_PROJECT_KEY]: sceneOutputsByProject,
+    sceneOutputs: currentProjectId ? sceneOutputs : [],
+    ...extra
+  }, () => resolve()));
+}
+
 function getEditorLabel(item, index) {
   if (editorKind === "characters") {
     const marker = regenQueue?.characters?.includes(item.id)
@@ -1159,7 +1288,7 @@ async function setSelectedAsRegenOnly() {
 
   sceneOutputs = sceneOutputs.filter((output) => output.sceneIndex !== item.index);
   checkpoint = buildManualCheckpoint(`Scene ${String(item.index).padStart(3, "0")}`);
-  await new Promise((resolve) => chrome.storage.local.set({ sceneOutputs, checkpoint }, () => resolve()));
+  await persistCurrentSceneOutputs({ checkpoint });
   await enqueueRegen("scene", item.index);
   await refreshSavedState();
   setLog(`${item.index}번 장면을 재생성 큐에 추가했습니다. (다른 장면 상태는 유지)`);
@@ -1188,7 +1317,7 @@ async function setSelectedAsNext() {
   sceneIndex = editorIndex;
   sceneOutputs = sceneOutputs.filter((output) => output.sceneIndex !== item.index);
   checkpoint = buildManualCheckpoint(`Scene ${String(item.index).padStart(3, "0")}`);
-  await new Promise((resolve) => chrome.storage.local.set({ sceneIndex, sceneOutputs, checkpoint }, () => resolve()));
+  await persistCurrentSceneOutputs({ sceneIndex, checkpoint });
   await refreshSavedState();
   setLog(`${item.index}번 장면을 다시 생성할 준비가 완료되었습니다. 기존 장면 결과는 삭제했습니다.`);
 }
@@ -1331,19 +1460,22 @@ async function runRecoverScene() {
 async function backOneScene() {
   if (!parsed) await parseInput();
   if (!parsed?.scenes?.length) return;
+  await refreshCurrentProjectContext();
+  await refreshSavedState({ render: false });
   const nextIndex = Math.max(0, sceneIndex - 1);
   const scene = parsed.scenes[nextIndex];
   sceneIndex = nextIndex;
   sceneOutputs = sceneOutputs.filter((output) => output.sceneIndex !== scene.index);
-  chrome.storage.local.set({ sceneIndex, sceneOutputs }, () => {
+  persistCurrentSceneOutputs({ sceneIndex }).then(() => {
     renderSummary();
     setLog(`${scene.index}번 장면으로 돌아갔습니다. 해당 장면의 기존 결과는 삭제했습니다.`);
   });
 }
 
 async function runDownloadScenes() {
-  chrome.storage.local.get({ sceneOutputs: [] }, (data) => {
-    const outputs = data.sceneOutputs || [];
+  await refreshCurrentProjectContext();
+  await refreshSavedState({ render: false });
+  const outputs = sceneOutputs || [];
     if (!outputs.length) {
       setLog("아직 저장된 장면 이미지가 없습니다.");
       return;
@@ -1362,7 +1494,6 @@ async function runDownloadScenes() {
       }
       setLog(`다운로드를 완료했습니다: ${response.count}개`);
     });
-  });
 }
 
 function sortSceneOutputsForDownload(outputs) {
@@ -1536,14 +1667,18 @@ function refreshSavedState(options = { render: true }) {
       [CHARACTER_REFS_BY_PROJECT_KEY]: {},
       [CHARACTER_LIBRARY_BY_PROJECT_KEY]: {},
       [PROJECT_LAST_USED_KEY]: {},
-      [REGEN_QUEUE_BY_PROJECT_KEY]: {}
+      [REGEN_QUEUE_BY_PROJECT_KEY]: {},
+      [SCENE_LAST_INDEX_BY_PROJECT_KEY]: {},
+      [SCENE_OUTPUTS_BY_PROJECT_KEY]: {}
     }, (data) => {
-      sceneOutputs = data.sceneOutputs || [];
       characterRefsByProject = data[CHARACTER_REFS_BY_PROJECT_KEY] || {};
       characterLibraryByProject = data[CHARACTER_LIBRARY_BY_PROJECT_KEY] || {};
       projectLastUsedAt = data[PROJECT_LAST_USED_KEY] || {};
       regenQueueByProject = data[REGEN_QUEUE_BY_PROJECT_KEY] || {};
+      sceneLastIndexByProject = data[SCENE_LAST_INDEX_BY_PROJECT_KEY] || {};
+      sceneOutputsByProject = data[SCENE_OUTPUTS_BY_PROJECT_KEY] || {};
       ensureProjectContextFromStorage();
+      sceneOutputs = getProjectBucket(sceneOutputsByProject, currentProjectId);
       characterRefs = getProjectBucket(characterRefsByProject, currentProjectId);
       characterLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
       regenQueue = normalizeRegenQueue(getProjectBucket(regenQueueByProject, currentProjectId));
@@ -1642,6 +1777,7 @@ function updateSettingsNote() {
 async function clearSource() {
   if (!confirmClearSource()) return;
   await mergeRefsIntoCharacterLibrary(characterRefs);
+  rememberLastSavedSceneIndex(getLastSavedSceneIndex(sceneOutputs));
   parsed = null;
   characterIndex = 0;
   sceneIndex = 0;
@@ -1659,12 +1795,15 @@ async function clearSource() {
   if (currentProjectId) {
     characterRefsByProject[currentProjectId] = {};
     regenQueueByProject[currentProjectId] = regenQueue;
+    sceneOutputsByProject[currentProjectId] = [];
   }
   chrome.storage.local.set({
     [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject,
-    [REGEN_QUEUE_BY_PROJECT_KEY]: regenQueueByProject
+    [REGEN_QUEUE_BY_PROJECT_KEY]: regenQueueByProject,
+    [SCENE_LAST_INDEX_BY_PROJECT_KEY]: sceneLastIndexByProject,
+    [SCENE_OUTPUTS_BY_PROJECT_KEY]: sceneOutputsByProject
   });
-  chrome.storage.local.remove(["source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs", "checkpoint"]);
+  chrome.storage.local.remove(["source", "parsed", "characterIndex", "sceneIndex", "sceneOutputs", "checkpoint", WORKFLOW_PROJECT_ID_KEY]);
   renderPromptEditor();
 }
 
@@ -1698,12 +1837,22 @@ function extractFlowProjectId(url = "") {
   return match ? decodeURIComponent(match[1]) : "";
 }
 
+function isFlowToolUrl(url = "") {
+  return url.includes("labs.google") && url.includes("/tools/flow");
+}
+
 async function refreshCurrentProjectContext() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const projectId = extractFlowProjectId(tab?.url || "");
+  const url = tab?.url || "";
+  const projectId = extractFlowProjectId(url);
   if (projectId) {
+    activeFlowWithoutProject = false;
     currentProjectId = projectId;
+  } else if (isFlowToolUrl(url)) {
+    activeFlowWithoutProject = true;
+    currentProjectId = "";
   } else {
+    activeFlowWithoutProject = false;
     ensureProjectContextFromStorage();
   }
   return currentProjectId;

@@ -32,6 +32,8 @@ const REFERENCE_ATTACH_INTERVAL_MS = 100;
 const CHARACTER_REFS_BY_PROJECT_KEY = "characterRefsByProject";
 const CHARACTER_LIBRARY_BY_PROJECT_KEY = "characterLibraryByProject";
 const PROJECT_LAST_USED_KEY = "projectLastUsedAt";
+const SCENE_LAST_INDEX_BY_PROJECT_KEY = "sceneLastIndexByProject";
+const SCENE_OUTPUTS_BY_PROJECT_KEY = "sceneOutputsByProject";
 const MAX_REFS_PER_PROJECT = 200;
 
 function debugLog(message, data) {
@@ -1300,6 +1302,7 @@ async function saveCharacterReference(id, item, model) {
 }
 
 async function saveSceneOutputs(scene, items, baseName, model) {
+  const projectId = getCurrentProjectId();
   const outputs = await loadSceneOutputs();
   const preservedOutputs = outputs.filter((output) => output.sceneIndex !== scene.index);
   const additions = items.map((item, index) => {
@@ -1307,6 +1310,7 @@ async function saveSceneOutputs(scene, items, baseName, model) {
     const filename = `${baseName}_${sequence}`;
     return {
       key: `${scene.index}:${item.href}`,
+      projectId,
       sceneIndex: scene.index,
       sceneTotal: scene.total,
       outputIndex: index + 1,
@@ -1322,14 +1326,58 @@ async function saveSceneOutputs(scene, items, baseName, model) {
 
   const nextOutputs = preservedOutputs.concat(additions)
     .sort((a, b) => (a.sceneIndex - b.sceneIndex) || (a.outputIndex - b.outputIndex));
-  await chrome.storage.local.set({ sceneOutputs: nextOutputs });
+  await saveProjectSceneOutputs(projectId, nextOutputs);
+  await saveLastSceneIndex(scene.index);
   console.info("[Flow Stepper] saved scene outputs", additions);
+}
+
+async function saveProjectSceneOutputs(projectId, outputs) {
+  if (!projectId) {
+    await chrome.storage.local.set({ sceneOutputs: outputs });
+    return;
+  }
+  const byProject = await loadSceneOutputsByProject();
+  byProject[projectId] = outputs;
+  await chrome.storage.local.set({
+    [SCENE_OUTPUTS_BY_PROJECT_KEY]: byProject,
+    sceneOutputs: outputs
+  });
+}
+
+async function saveLastSceneIndex(sceneIndex) {
+  const projectId = getCurrentProjectId();
+  const value = Number(sceneIndex);
+  if (!projectId || !Number.isFinite(value)) return;
+  const lastByProject = await loadSceneLastIndexMap();
+  lastByProject[projectId] = Math.max(Number(lastByProject[projectId] || 0), value);
+  await chrome.storage.local.set({ [SCENE_LAST_INDEX_BY_PROJECT_KEY]: lastByProject });
+}
+
+function loadSceneLastIndexMap() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [SCENE_LAST_INDEX_BY_PROJECT_KEY]: {} }, (result) => {
+      resolve(result[SCENE_LAST_INDEX_BY_PROJECT_KEY] || {});
+    });
+  });
 }
 
 function loadSceneOutputs() {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ sceneOutputs: [] }, (result) => {
-      resolve(result.sceneOutputs || []);
+    const projectId = getCurrentProjectId();
+    chrome.storage.local.get({
+      sceneOutputs: [],
+      [SCENE_OUTPUTS_BY_PROJECT_KEY]: {}
+    }, (result) => {
+      const byProject = result[SCENE_OUTPUTS_BY_PROJECT_KEY] || {};
+      resolve(projectId ? (byProject[projectId] || []) : []);
+    });
+  });
+}
+
+function loadSceneOutputsByProject() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [SCENE_OUTPUTS_BY_PROJECT_KEY]: {} }, (result) => {
+      resolve(result[SCENE_OUTPUTS_BY_PROJECT_KEY] || {});
     });
   });
 }

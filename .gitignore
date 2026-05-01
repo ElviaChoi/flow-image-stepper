@@ -2,3 +2,10 @@
 *.tmp
 .DS_Store
 Thumbs.db
+*.bak
+.env
+.env.*
+node_modules/
+dist/
+build/
+*.zip
