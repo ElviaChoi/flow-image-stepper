@@ -314,12 +314,18 @@ function getBuilderCardIndex(card) {
 function getBuilderCharacters() {
   return [...characterBuilderRowsEl.querySelectorAll(".builder-character-card")]
     .map((card, index) => {
-      const name = card.querySelector(".builder-character-name")?.value.trim() || `캐릭터 ${index + 1}`;
-      const id = normalizeCharacterId(card.querySelector(".builder-character-id")?.value || makeBuilderCharacterId(name, index));
-      const prompt = card.querySelector(".builder-character-prompt")?.value.trim() || "";
+      const nameInput = card.querySelector(".builder-character-name");
+      const idInput = card.querySelector(".builder-character-id");
+      const promptInput = card.querySelector(".builder-character-prompt");
+      const rawName = nameInput?.value.trim() || "";
+      const rawId = idInput?.value.trim() || "";
+      const prompt = promptInput?.value.trim() || "";
+      if (!rawName && !prompt && idInput?.dataset.touched !== "true") return null;
+      const name = rawName || `캐릭터 ${index + 1}`;
+      const id = normalizeCharacterId(rawId || makeBuilderCharacterId(name, index));
       return { name, id, prompt };
     })
-    .filter((item) => item.name || item.id || item.prompt);
+    .filter(Boolean);
 }
 
 function getBuilderScenes() {
@@ -335,8 +341,38 @@ function getBuilderScenes() {
     .filter((item) => item.title || item.references.length || item.prompt);
 }
 
+function getAvailableCharacterOptions() {
+  const byId = new Map();
+  const addOption = (id, name = "") => {
+    const cleanId = normalizeCharacterId(id);
+    if (!cleanId || byId.has(cleanId)) return;
+    byId.set(cleanId, {
+      id: cleanId,
+      name: name || cleanId.replace(/_CS-\d{2}$/i, "")
+    });
+  };
+
+  for (const character of parsed?.characters || []) {
+    addOption(character.id, character.name || "");
+  }
+  for (const character of getBuilderCharacters()) {
+    addOption(character.id, character.name || "");
+  }
+  for (const id of Object.keys(characterRefs || {})) {
+    addOption(id);
+  }
+  for (const id of Object.keys(characterLibrary || {})) {
+    addOption(id);
+  }
+  const projectLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
+  for (const id of Object.keys(projectLibrary || {})) {
+    addOption(id);
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
 function syncSceneCharacterOptions() {
-  const characters = getBuilderCharacters();
+  const characters = getAvailableCharacterOptions();
   for (const list of sceneBuilderRowsEl.querySelectorAll(".scene-character-list")) {
     const selected = new Set([
       ...(list.dataset.selected || "").split(","),
@@ -421,7 +457,7 @@ async function parseInput() {
   }
   sceneIndex = 0;
   sceneOutputs = [];
-  characterRefs = await getRestoredCharacterRefs(parsed, currentProjectId);
+  characterRefs = await getRestoredCharacterRefs(parsed, currentProjectId, { includeAllWhenNoIds: true });
   characterIndex = getNextCharacterIndex(parsed, characterRefs);
   checkpoint = null;
   regenQueue = { characters: [], scenes: [] };
@@ -514,11 +550,14 @@ function mergeRefsIntoCharacterLibrary(refs = {}) {
   });
 }
 
-async function getRestoredCharacterRefs(nextParsed, projectId = currentProjectId) {
+async function getRestoredCharacterRefs(nextParsed, projectId = currentProjectId, options = {}) {
   const library = await loadCharacterLibrary();
   const ids = getReferencedCharacterIds(nextParsed);
+  const idsToRestore = ids.size || !options.includeAllWhenNoIds
+    ? [...ids]
+    : Object.keys(library || {});
   const restored = {};
-  for (const id of ids) {
+  for (const id of idsToRestore) {
     if (library[id]) {
       restored[id] = library[id];
     }
@@ -527,17 +566,12 @@ async function getRestoredCharacterRefs(nextParsed, projectId = currentProjectId
 }
 
 async function restoreCharacterReferencesFromLibrary() {
-  if (!parsed) {
-    await parseInput();
-    return;
-  }
-
   await refreshCurrentProjectContext();
   if (!currentProjectId) {
     setLog("Flow 프로젝트 탭을 열어야 참조를 복구할 수 있습니다.");
     return;
   }
-  const restored = await getRestoredCharacterRefs(parsed, currentProjectId);
+  const restored = await getRestoredCharacterRefs(parsed, currentProjectId, { includeAllWhenNoIds: true });
   const availableIds = Object.keys(characterLibrary || {}).sort();
   const currentIds = [...getReferencedCharacterIds(parsed)];
   const matchedIds = Object.keys(restored).sort();
@@ -548,13 +582,15 @@ async function restoreCharacterReferencesFromLibrary() {
   };
   characterRefsByProject[currentProjectId] = characterRefs;
   projectLastUsedAt[currentProjectId] = Date.now();
-  characterIndex = getNextCharacterIndex(parsed, characterRefs);
+  if (parsed) {
+    characterIndex = getNextCharacterIndex(parsed, characterRefs);
+  }
   chrome.storage.local.set({
     [CHARACTER_REFS_BY_PROJECT_KEY]: characterRefsByProject,
     [PROJECT_LAST_USED_KEY]: projectLastUsedAt,
     characterIndex
   }, () => {
-    renderSummary();
+    if (parsed) renderSummary();
     const count = Object.keys(restored).length;
     setLog(count
       ? `참조 ${count}개를 불러왔습니다: ${matchedIds.join(", ")}.`
@@ -657,7 +693,6 @@ function buildSummaryAccordion(title, detail, content, options = {}) {
 
 function getLibraryAccordionDetail() {
   const count = Object.keys(getProjectBucket(characterLibraryByProject, currentProjectId) || {}).length;
-  if (parsed?.mode === "simple-scenes") return "간단 장면 모드";
   return count ? `${count}개 보관` : "보관된 참조 없음";
 }
 
@@ -758,12 +793,6 @@ function buildCharacterSummary() {
 
 function buildLibrarySummary() {
   const card = createEl("div", "summary-card");
-  if (parsed.mode === "simple-scenes") {
-    card.append(
-      createEl("div", "summary-empty", "간단 장면 모드에서는 캐릭터 참조를 사용하지 않습니다.")
-    );
-    return card;
-  }
   const projectLibrary = getProjectBucket(characterLibraryByProject, currentProjectId);
   const libraryEntries = Object.entries(projectLibrary || {})
     .filter(([, ref]) => ref)
@@ -937,21 +966,67 @@ function renderPromptEditor() {
   meta.className = "editor-meta";
   meta.textContent = selected ? getEditorMeta(selected) : "수정할 항목이 없습니다.";
 
+  const referencePicker = editorKind === "scenes" && selected
+    ? buildEditorReferencePicker(selected.references || [])
+    : null;
+
   const actions = document.createElement("div");
   actions.className = "editor-actions";
   actions.append(
+    buildEditorButton("수정 저장", () => {
+      saveEditedPrompt(textarea.value, {
+        references: referencePicker ? getCheckedReferenceIds(referencePicker) : null
+      });
+    }, "", !selected),
     buildEditorButton("이 항목만 재생성 준비", async () => {
-      if (!saveEditedPrompt(textarea.value, { silent: true })) return;
+      if (!saveEditedPrompt(textarea.value, {
+        silent: true,
+        references: referencePicker ? getCheckedReferenceIds(referencePicker) : null
+      })) return;
       await setSelectedAsRegenOnly();
     }, "button-primary", !selected),
     buildEditorButton("이 지점부터 다시 생성 준비", async () => {
-      if (!saveEditedPrompt(textarea.value, { silent: true })) return;
+      if (!saveEditedPrompt(textarea.value, {
+        silent: true,
+        references: referencePicker ? getCheckedReferenceIds(referencePicker) : null
+      })) return;
       await setSelectedAsNext();
     }, "", !selected)
   );
 
-  promptEditorEl.append(tabs, select, meta, textarea, actions);
+  promptEditorEl.append(tabs, select, meta);
+  if (referencePicker) promptEditorEl.append(referencePicker);
+  promptEditorEl.append(textarea, actions);
   updatePromptEditorAccordionSummary();
+}
+
+function buildEditorReferencePicker(selectedIds = []) {
+  const field = createEl("div", "builder-field editor-reference-picker");
+  field.append(createEl("span", "", "참조 캐릭터"));
+  const list = createEl("div", "scene-character-list");
+  const selected = new Set((selectedIds || []).map((id) => normalizeCharacterId(id)).filter(Boolean));
+  const options = getAvailableCharacterOptions();
+  if (!options.length) {
+    list.append(createEl("div", "builder-empty", "저장된 캐릭터 참조가 없습니다. 먼저 참조 보관함을 다시 연결하세요."));
+  } else {
+    for (const option of options) {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = option.id;
+      checkbox.checked = selected.has(option.id);
+      label.append(checkbox, createEl("span", "", `${option.name} (${option.id})`));
+      list.append(label);
+    }
+  }
+  field.append(list);
+  return field;
+}
+
+function getCheckedReferenceIds(container) {
+  return [...container.querySelectorAll('input[type="checkbox"]:checked')]
+    .map((input) => normalizeCharacterId(input.value))
+    .filter(Boolean);
 }
 
 function buildEditorTab(kind, label) {
@@ -1039,7 +1114,9 @@ function saveEditedPrompt(value, options = {}) {
 
   item.prompt = prompt;
   if (editorKind === "scenes") {
-    item.references = getReferencesFromPrompt(prompt);
+    item.references = Array.isArray(options.references)
+      ? options.references
+      : getReferencesFromPrompt(prompt);
   }
   chrome.storage.local.set({ parsed }, () => {
     renderSummary();
@@ -1051,7 +1128,7 @@ function saveEditedPrompt(value, options = {}) {
 }
 
 function getReferencesFromPrompt(prompt) {
-  const knownIds = new Set((parsed.characters || []).map((character) => normalizeCharacterId(character.id)));
+  const knownIds = new Set(getAvailableCharacterOptions().map((character) => normalizeCharacterId(character.id)));
   return [...new Set((prompt.match(/[^\s,()]+_CS-\d{2}/g) || [])
     .map((id) => normalizeCharacterId(id))
     .filter(Boolean))]
@@ -1623,7 +1700,12 @@ function extractFlowProjectId(url = "") {
 
 async function refreshCurrentProjectContext() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  currentProjectId = extractFlowProjectId(tab?.url || "");
+  const projectId = extractFlowProjectId(tab?.url || "");
+  if (projectId) {
+    currentProjectId = projectId;
+  } else {
+    ensureProjectContextFromStorage();
+  }
   return currentProjectId;
 }
 
